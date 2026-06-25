@@ -67,6 +67,31 @@ pub enum Command {
         #[command(subcommand)]
         command: AutostartCommand,
     },
+    /// Manage mock/test servers for local diagnostics.
+    TestServer {
+        #[command(subcommand)]
+        command: TestServerCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+/// Subcommands to run test/mock servers.
+pub enum TestServerCommand {
+    /// Start a mock ZKTeco biometric device server.
+    Device {
+        /// TCP port to bind to.
+        #[arg(long, default_value = "4370")]
+        port: u16,
+        /// Number of mock check-in/out records to pre-populate.
+        #[arg(long, default_value = "5")]
+        records: usize,
+    },
+    /// Start a mock HRMS webhook API server.
+    Hrms {
+        /// HTTP port to bind to.
+        #[arg(long, default_value = "8800")]
+        port: u16,
+    },
 }
 
 #[derive(Debug, Subcommand)]

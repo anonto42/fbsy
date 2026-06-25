@@ -1,0 +1,269 @@
+//! Mock ZKTeco TCP device server and HRMS HTTP webhook server.
+
+use std::{
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use anyhow::{bail, Result};
+use chrono::Utc;
+use console::style;
+
+const MACHINE_PREPARE_DATA_1: u16 = 20560;
+const MACHINE_PREPARE_DATA_2: u16 = 32130;
+const USHRT_MAX: u16 = 65535;
+
+const CMD_CONNECT: u16 = 1000;
+const CMD_EXIT: u16 = 1001;
+const CMD_ATTLOG_RRQ: u8 = 13;
+const CMD_USERTEMP_RRQ: u8 = 9;
+const CMD_CLEAR_ATTLOG: u16 = 15;
+const CMD_ACK_OK: u16 = 2000;
+const CMD_DATA: u16 = 1501;
+const CMD_RWB: u16 = 1503;
+
+#[derive(Clone, Debug)]
+struct RawAttendanceMock {
+    uid: u16,
+    timestamp: u32, // encoded ZKTeco format
+    punch: u8,
+}
+
+/// Run a mock ZKTeco device server speaking raw TCP protocol.
+pub fn run_device(port: u16, records_count: usize) -> Result<()> {
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+    println!(
+        "{} Mock ZKTeco device server listening on {} with {} records pre-populated.",
+        style("✔").green().bold(),
+        style(format!("0.0.0.0:{port}")).cyan().bold(),
+        style(records_count).yellow().bold()
+    );
+
+    // Pre-populate mock attendance records
+    let now = Utc::now();
+    let mut records = Vec::new();
+    for i in 0..records_count {
+        let ts = now - chrono::Duration::minutes((records_count - 1 - i) as i64 * 5);
+        let year = ts.format("%y").to_string().parse::<u32>().unwrap_or(26);
+        let month = ts.format("%m").to_string().parse::<u32>().unwrap_or(6);
+        let day = ts.format("%d").to_string().parse::<u32>().unwrap_or(22);
+        let hour = ts.format("%H").to_string().parse::<u32>().unwrap_or(8);
+        let minute = ts.format("%M").to_string().parse::<u32>().unwrap_or(30);
+        let second = ts.format("%S").to_string().parse::<u32>().unwrap_or(0);
+
+        let encoded_time = (year * 12 * 31 + (month - 1) * 31 + day - 1) * (24 * 60 * 60)
+            + hour * 3600
+            + minute * 60
+            + second;
+
+        records.push(RawAttendanceMock {
+            uid: (1001 + i) as u16,
+            timestamp: encoded_time,
+            punch: if i % 2 == 0 { 0 } else { 1 }, // Alternates check-in/out
+        });
+    }
+
+    let records = Arc::new(Mutex::new(records));
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let records = Arc::clone(&records);
+                thread::spawn(move || {
+                    let _ = handle_device_client(stream, records);
+                });
+            }
+            Err(err) => eprintln!("Device client accept failed: {err}"),
+        }
+    }
+    Ok(())
+}
+
+fn handle_device_client(mut stream: TcpStream, records: Arc<Mutex<Vec<RawAttendanceMock>>>) -> Result<()> {
+    let mut session_id = 0;
+
+    loop {
+        let mut tcp_header = [0u8; 8];
+        if stream.read_exact(&mut tcp_header).is_err() {
+            break;
+        }
+        let p1 = u16::from_le_bytes([tcp_header[0], tcp_header[1]]);
+        let p2 = u16::from_le_bytes([tcp_header[2], tcp_header[3]]);
+        if p1 != MACHINE_PREPARE_DATA_1 || p2 != MACHINE_PREPARE_DATA_2 {
+            bail!("Invalid ZKTeco TCP packet signature");
+        }
+        let packet_len = u32::from_le_bytes([tcp_header[4], tcp_header[5], tcp_header[6], tcp_header[7]]) as usize;
+        let mut packet = vec![0u8; packet_len];
+        if stream.read_exact(&mut packet).is_err() {
+            break;
+        }
+
+        let cmd = u16::from_le_bytes([packet[0], packet[1]]);
+        let recv_reply = u16::from_le_bytes([packet[6], packet[7]]);
+        let cmd_data = &packet[8..];
+
+        let mut reply_id = recv_reply.wrapping_add(1);
+        if reply_id == USHRT_MAX {
+            reply_id = 0;
+        }
+
+        if cmd == CMD_CONNECT {
+            session_id = 12345;
+            let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+            stream.write_all(&reply)?;
+        } else if cmd == CMD_EXIT {
+            let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+            stream.write_all(&reply)?;
+            break;
+        } else if cmd == CMD_RWB {
+            let sub_cmd = if cmd_data.len() >= 2 { cmd_data[1] } else { 0 };
+            if sub_cmd == CMD_ATTLOG_RRQ {
+                let list = records.lock().unwrap();
+                let mut record_bytes = Vec::new();
+                for r in list.iter() {
+                    record_bytes.extend(r.uid.to_le_bytes());
+                    record_bytes.push(1); // status (1)
+                    record_bytes.extend(r.timestamp.to_le_bytes());
+                    record_bytes.push(r.punch);
+                }
+                let declared_size = record_bytes.len() as u32;
+                let payload = [declared_size.to_le_bytes().as_slice(), record_bytes.as_slice()].concat();
+                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
+                stream.write_all(&reply)?;
+            } else if sub_cmd == CMD_USERTEMP_RRQ {
+                let payload = 0u32.to_le_bytes();
+                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
+                stream.write_all(&reply)?;
+            } else {
+                let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+                stream.write_all(&reply)?;
+            }
+        } else if cmd == CMD_CLEAR_ATTLOG {
+            if let Ok(mut list) = records.lock() {
+                println!(
+                    "{} Attendance logs cleared on mock device (records count: {})",
+                    style("✔").green().bold(),
+                    list.len()
+                );
+                list.clear();
+            }
+            let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+            stream.write_all(&reply)?;
+        } else {
+            let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+            stream.write_all(&reply)?;
+        }
+    }
+    Ok(())
+}
+
+fn make_tcp_packet(command: u16, data: &[u8], session_id: u16, reply_id: u16) -> Vec<u8> {
+    let mut header_template = Vec::with_capacity(8);
+    header_template.extend(command.to_le_bytes());
+    header_template.extend(0u16.to_le_bytes());
+    header_template.extend(session_id.to_le_bytes());
+    header_template.extend(reply_id.to_le_bytes());
+
+    let checksum = calc_checksum(&[header_template.as_slice(), data].concat());
+    let mut packet = Vec::with_capacity(16 + data.len());
+    packet.extend(MACHINE_PREPARE_DATA_1.to_le_bytes());
+    packet.extend(MACHINE_PREPARE_DATA_2.to_le_bytes());
+    packet.extend(((8 + data.len()) as u32).to_le_bytes());
+    packet.extend(command.to_le_bytes());
+    packet.extend(checksum.to_le_bytes());
+    packet.extend(session_id.to_le_bytes());
+    packet.extend(reply_id.to_le_bytes());
+    packet.extend(data);
+    packet
+}
+
+fn calc_checksum(data: &[u8]) -> u16 {
+    let mut checksum: u32 = 0;
+    for chunk in data.chunks(2) {
+        let value = if chunk.len() == 2 {
+            u16::from_le_bytes([chunk[0], chunk[1]]) as u32
+        } else {
+            chunk[0] as u32
+        };
+        checksum += value;
+        while checksum > USHRT_MAX as u32 {
+            checksum -= USHRT_MAX as u32;
+        }
+    }
+    (!(checksum as u16)) & 0xffff
+}
+
+/// Run a mock HRMS webhook API server.
+pub fn run_hrms(port: u16) -> Result<()> {
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+    println!(
+        "{} Mock HRMS server listening on {}.",
+        style("✔").green().bold(),
+        style(format!("http://0.0.0.0:{port}")).cyan().bold()
+    );
+
+    let received_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let received_events = Arc::clone(&received_events);
+                thread::spawn(move || {
+                    let _ = handle_hrms_client(stream, received_events);
+                });
+            }
+            Err(err) => eprintln!("HRMS client accept failed: {err}"),
+        }
+    }
+    Ok(())
+}
+
+fn handle_hrms_client(mut stream: TcpStream, received_events: Arc<Mutex<Vec<serde_json::Value>>>) -> Result<()> {
+    let mut buffer = [0u8; 65536];
+    let read = stream.read(&mut buffer)?;
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let request_line = request.lines().next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or_default();
+    let (clean_path, _query) = path.split_once('?').unwrap_or((path, ""));
+
+    if method == "POST" {
+        if let Some(body_start) = request.find("\r\n\r\n") {
+            let body = &request[body_start + 4..];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                println!(
+                    "{} Received HRMS Event Payload:\n{}",
+                    style("➡").cyan().bold(),
+                    serde_json::to_string_pretty(&val).unwrap_or_default()
+                );
+                if let Ok(mut list) = received_events.lock() {
+                    list.push(val);
+                }
+            }
+        }
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
+        stream.write_all(response.as_bytes())?;
+    } else if method == "GET" && clean_path == "/events" {
+        let list = received_events.lock().unwrap();
+        let body = serde_json::to_string_pretty(&*list)?;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes())?;
+    } else if method == "GET" && clean_path == "/reset" {
+        if let Ok(mut list) = received_events.lock() {
+            list.clear();
+        }
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
+        stream.write_all(response.as_bytes())?;
+    } else {
+        let response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(response.as_bytes())?;
+    }
+    Ok(())
+}

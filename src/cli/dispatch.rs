@@ -11,6 +11,7 @@ use super::{
     args::Cli,
     command::{
         AutostartCommand, Command, ConfigCommand, DevicesCommand, LogsCommand, WebhookCommand,
+        TestServerCommand,
     },
 };
 
@@ -58,6 +59,10 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Autostart { command } => match command {
             AutostartCommand::Install => application::autostart::install(),
             AutostartCommand::Uninstall => application::autostart::uninstall(),
+        },
+        Command::TestServer { command } => match command {
+            TestServerCommand::Device { port, records } => application::test_server::run_device(port, records),
+            TestServerCommand::Hrms { port } => application::test_server::run_hrms(port),
         },
     }
 }

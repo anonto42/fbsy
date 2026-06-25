@@ -9,3 +9,4 @@ pub mod doctor;
 pub mod serve;
 pub mod setup;
 pub mod sync_once;
+pub mod test_server;
