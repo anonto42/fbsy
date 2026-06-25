@@ -1,89 +1,238 @@
-# FingerBridge
+# FingerBridge (`fbsy`)
 
-Native biometric attendance bridge for HRMS webhook ingestion.
+Native biometric attendance bridge — connects ZKTeco devices to HRMS via webhook.
 
-The bridge runs on a client machine inside the office LAN, connects to a ZKTeco attendance device, pulls attendance records, converts them into HRMS events, and forwards those events to the HRMS webhook API.
+Runs on a Windows or Linux machine inside the office LAN. Pulls attendance records from ZKTeco devices over TCP, maps them to HRMS events, and posts them to a webhook URL.
 
-```text
-ZKTeco Device
-      |
-      | TCP 4370
-      v
-FingerBridge
-      |
-      | HTTPS JSON webhook
-      v
-HRMS API
+```
+ZKTeco Device  ──TCP 4370──▶  fbsy (office machine)  ──HTTPS JSON──▶  HRMS API
 ```
 
-## Project Status
+---
 
-This project is currently in scaffold stage.
+## Download
 
-Implemented:
+Grab the binary for your platform from the [Releases](../../releases) page — no installer, no runtime, no dependencies.
 
-- Rust package structure
-- CLI command skeleton with `clap`
-- config model and validation skeleton
-- device abstraction traits
-- event model skeleton
-- sync result skeleton
-- example config
-- project documentation
+| Platform | File |
+|---|---|
+| Windows 64-bit | `fbsy-windows-x86_64.exe` |
+| Linux x86\_64 (Debian / Arch / Fedora) | `fbsy-linux-x86_64` |
+| Linux ARM64 | `fbsy-linux-aarch64` |
+| macOS Intel | `fbsy-macos-intel` |
+| macOS Apple Silicon (M1/M2/M3) | `fbsy-macos-arm64` |
 
-Not implemented yet:
-
-- real ZKTeco protocol adapter
-- HRMS HTTP client
-- setup wizard
-- HTTP server
-- scheduler
-- service/autostart installers
-- release CI
-
-## Commands
-
+On Linux/macOS, make it executable after downloading:
 ```bash
-cargo run -- doctor
-cargo run -- config validate
-cargo run -- config show
-cargo run -- once
-cargo run -- serve --interval 120
+chmod +x fbsy-linux-x86_64
 ```
 
-Compatibility aliases planned from the Python version:
+---
+
+## Quick start
 
 ```bash
-fingerbridge --setup
-fingerbridge --once
-fingerbridge --interval 120
-fingerbridge --install-autostart
-fingerbridge --uninstall-autostart
-```
-
-## First Local Setup
-
-```bash
+# 1. Copy and fill in the example config
 cp config.example.json config.json
-cargo run -- config validate
+# edit config.json with your device IP, webhook URL, and API key
+
+# 2. Validate config
+fbsy config validate
+
+# 3. Check connectivity
+fbsy doctor --deep
+
+# 4. Pull attendance once (safe — does not clear device by default)
+fbsy once
+
+# 5. Run in serve mode (scheduler + HTTP API)
+fbsy serve
+```
+
+---
+
+## Configuration (`config.json`)
+
+```jsonc
+{
+  "vpsWebhookUrl": "https://api.yourdomain.com/api/v1/biometric-devices/webhook",
+  "bridgePort": 7431,
+  "devices": [
+    {
+      "deviceIp": "192.168.1.100",
+      "devicePort": 4370,
+      "devicePassword": 0,
+      "deviceTimeout": 15,
+      "deviceOmitPing": true,
+      "deviceCode": "GATE-01",
+      "apiKey": "your-webhook-api-key",
+      "organizationId": 1,
+      "syncIntervalSeconds": 300,
+      "clearAttendanceAfterSync": false
+    }
+  ]
+}
+```
+
+Multiple devices are supported — add more objects to the `devices` array.
+
+Optional — enable HRMS job polling (push/pull templates):
+```jsonc
+{
+  "hrmsBaseUrl": "https://app.yourdomain.com/api/v1",
+  "hrmsApiToken": "device-token",
+  "jobPollIntervalSeconds": 30
+}
+```
+
+Full config reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+
+---
+
+## CLI commands
+
+```bash
+fbsy                               # same as: fbsy doctor
+fbsy doctor [--deep]               # readiness check; --deep tests live connections
+fbsy setup                         # interactive first-time wizard
+fbsy once [--device GATE-01]       # pull attendance once and exit
+fbsy serve [--interval 120]        # run scheduler + local HTTP API
+
+fbsy config validate               # validate config.json, exit 0 or 1
+fbsy config show                   # print config with secrets redacted
+fbsy config path                   # print path to config file
+
+fbsy devices list                  # list configured devices
+fbsy devices test GATE-01          # test TCP connection to one device
+fbsy webhook test GATE-01          # test HRMS webhook for one device
+
+fbsy logs path                     # print log directory
+
+fbsy test-server device --port 14370 --records 5   # mock ZKTeco device
+fbsy test-server hrms   --port 18800               # mock HRMS webhook
+```
+
+Backward-compatible aliases (parity with the Python bridge):
+```bash
+fbsy --setup
+fbsy --once [--device GATE-01]
+fbsy --interval 120
+```
+
+Full CLI reference: [docs/CLI.md](docs/CLI.md)
+
+---
+
+## Serve mode — HTTP API
+
+When running `fbsy serve`, a local HTTP API listens on `127.0.0.1:7431`:
+
+```
+GET  /health                 — agent status, device states, last sync result
+POST /sync                   — trigger sync for all devices
+POST /sync?device=GATE-01    — trigger sync for one device
+```
+
+Example:
+```bash
+curl http://127.0.0.1:7431/health
+curl -X POST http://127.0.0.1:7431/sync
+```
+
+---
+
+## Safety rule
+
+**Attendance records are never cleared from the device unless the HRMS webhook upload fully succeeded.**
+
+`clearAttendanceAfterSync` defaults to `false`. Enable it only after verifying that sync works correctly end-to-end.
+
+---
+
+## How data flows
+
+```
+1. Connect to ZKTeco device over TCP (with optional password auth)
+2. Query record count via CMD_GET_FREE_SIZES
+3. Pull attendance via CMD_PREPARE_BUFFER → CMD_DATA / CMD_PREPARE_DATA chunks
+4. Decode records (8-byte, 16-byte, or 40-byte format depending on firmware)
+5. Map punch codes → check_in / check_out  (0 or 4 = check_in, else check_out)
+6. POST events in 500-record batches to HRMS webhook (retry on 429 / 5xx)
+7. If upload succeeded AND clearAttendanceAfterSync = true → CMD_CLEAR_ATTLOG
+```
+
+---
+
+## Local testing (no real device needed)
+
+```bash
+# Terminal 1 — mock HRMS webhook
+fbsy test-server hrms --port 18800
+
+# Terminal 2 — mock ZKTeco device
+fbsy test-server device --port 14370 --records 5
+
+# Terminal 3 — run sync against mocks
+fbsy once --config config.mock.example.json
+```
+
+---
+
+## Development
+
+Requirements: Rust stable (1.75+)
+
+```bash
+git clone https://github.com/anonto42/fbsy
+cd fbsy
+
+# Install git hooks (runs fmt + clippy + tests on every commit)
+bash scripts/install-hooks.sh
+
+cargo build
+cargo test
 cargo run -- doctor
 ```
 
-## Documentation
+To build a release binary locally:
+```bash
+cargo build --release
+# binary at: target/release/fbsy
+```
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Code Walkthrough From main.rs](docs/CODE_WALKTHROUGH.md)
-- [Codebase Architecture Decision](docs/CODEBASE_ARCHITECTURE_DECISION.md)
-- [CLI Design](docs/CLI.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Development](docs/DEVELOPMENT.md)
-- [Full Software Workflow Plan](docs/FULL_WORKFLOW_PLAN.md)
-- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
-- [Migration From Python](docs/MIGRATION_FROM_PYTHON.md)
-- [Packaging](docs/PACKAGING.md)
-- [Security And Safety](docs/SECURITY.md)
-- [Testing](docs/TESTING.md)
+Releases are built automatically by GitHub Actions on every version bump in `Cargo.toml`.
 
-## Core Safety Rule
+Full dev guide: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 
-Never clear attendance records from the ZKTeco device unless the HRMS webhook upload succeeded.
+---
+
+## Architecture
+
+```
+src/
+├── cli/          — argument parsing (clap), command dispatch
+├── config/       — BridgeConfig model, validation, defaults
+├── domain/       — pure types: RawAttendance, HrmsEvent, FingerTemplate
+├── ports/        — traits: DeviceClient, HrmsClient, ConfigStore
+├── adapters/     — implementations: ZKTeco TCP, reqwest HRMS, JSON config file
+├── application/  — use cases: sync_once, serve, doctor, setup
+└── runtime/      — DeviceSyncState (per-device lock), job poller, scheduler
+```
+
+Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODEBASE_ARCHITECTURE_DECISION.md)
+
+---
+
+## Docs
+
+| Document | What it covers |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer diagram, module responsibilities |
+| [CLI.md](docs/CLI.md) | All commands, flags, and examples |
+| [CONFIGURATION.md](docs/CONFIGURATION.md) | Every config field with defaults and valid ranges |
+| [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Build, test, hooks, workflow |
+| [TESTING.md](docs/TESTING.md) | Test strategy, mock servers, integration tests |
+| [SECURITY.md](docs/SECURITY.md) | Safety invariants, secret redaction, threat model |
+| [MIGRATION_FROM_PYTHON.md](docs/MIGRATION_FROM_PYTHON.md) | Differences from the Python zkteco-bridge |
+| [PACKAGING.md](docs/PACKAGING.md) | Release CI, binary naming, checksums |
+| [CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md) | Trace through the code from main.rs |
