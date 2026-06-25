@@ -15,6 +15,7 @@ const MACHINE_PREPARE_DATA_1: u16 = 20560;
 const MACHINE_PREPARE_DATA_2: u16 = 32130;
 const USHRT_MAX: u16 = 65535;
 
+const CMD_GET_FREE_SIZES: u16 = 50;
 const CMD_CONNECT: u16 = 1000;
 const CMD_EXIT: u16 = 1001;
 const CMD_ATTLOG_RRQ: u8 = 13;
@@ -117,6 +118,14 @@ fn handle_device_client(
         if cmd == CMD_CONNECT {
             session_id = 12345;
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
+            stream.write_all(&reply)?;
+        } else if cmd == CMD_GET_FREE_SIZES {
+            // Return 20 × i32. Field [8] = attendance record count.
+            let record_count = records.lock().unwrap().len() as i32;
+            let mut fields = [0i32; 20];
+            fields[8] = record_count;
+            let data: Vec<u8> = fields.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_EXIT {
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
