@@ -37,7 +37,8 @@ jobs:
             artifact: fbsy-windows-x86_64
             ext: ".exe"
 
-          - os: macos-13
+          # cross-compiled from Apple Silicon runner — more available than macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact: fbsy-macos-intel
             ext: ""
