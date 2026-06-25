@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// Prepare the bridge to run as a long-lived local service.
-pub fn run(interval: Option<u64>, config: Option<PathBuf>) -> Result<()> {
+pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Result<()> {
     let path = config.unwrap_or_else(default_config_path);
     let store = JsonConfigStore;
     let mut cfg = store.load(&path)?;
@@ -40,7 +40,9 @@ pub fn run(interval: Option<u64>, config: Option<PathBuf>) -> Result<()> {
     let states = build_states(&cfg);
     start_boot_syncs(&states);
     start_schedulers(&states);
-    start_job_poller(&cfg);
+    if !no_poll {
+        start_job_poller(&cfg);
+    }
 
     let address = format!("127.0.0.1:{}", cfg.bridge_port);
     let listener = TcpListener::bind(&address)?;

@@ -62,6 +62,10 @@ impl DeviceConnector for ZktecoTcpConnector {
             .set_write_timeout(Some(timeout))
             .map_err(|e| DeviceError::Message(format!("set write timeout: {e}")))?;
 
+        if cfg.device_force_udp {
+            eprintln!("warning: deviceForceUdp = true is not yet supported — connecting via TCP");
+        }
+
         let mut client = ZktecoTcpClient {
             stream,
             session_id: 0,

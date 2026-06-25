@@ -16,6 +16,8 @@ pub struct SyncResult {
     pub forwarded: usize,
     /// Whether device attendance was cleared after successful upload.
     pub device_attendance_cleared: bool,
-    /// Human-readable status for current scaffold and future errors.
+    /// ISO 8601 UTC timestamp when this sync started (matches Python bridge).
+    pub started_at: String,
+    /// Human-readable status.
     pub message: String,
 }

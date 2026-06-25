@@ -38,6 +38,9 @@ pub enum Command {
         /// Optional interval override in seconds.
         #[arg(long)]
         interval: Option<u64>,
+        /// Disable HRMS job polling (attendance sync only).
+        #[arg(long)]
+        no_poll: bool,
         /// Optional config path for testing or custom installs.
         #[arg(long)]
         config: Option<PathBuf>,

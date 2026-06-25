@@ -40,7 +40,11 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Doctor { json, deep, config } => application::doctor::run(config, json, deep),
         Command::Setup => application::setup::run(),
         Command::Once { device, config } => application::sync_once::run(config, device),
-        Command::Serve { interval, config } => application::serve::run(interval, config),
+        Command::Serve {
+            interval,
+            no_poll,
+            config,
+        } => application::serve::run(interval, no_poll, config),
         Command::Config { command } => match command {
             ConfigCommand::Validate { path } => application::config::validate(path),
             ConfigCommand::Show { path } => application::config::show(path),
