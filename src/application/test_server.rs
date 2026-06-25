@@ -81,7 +81,10 @@ pub fn run_device(port: u16, records_count: usize) -> Result<()> {
     Ok(())
 }
 
-fn handle_device_client(mut stream: TcpStream, records: Arc<Mutex<Vec<RawAttendanceMock>>>) -> Result<()> {
+fn handle_device_client(
+    mut stream: TcpStream,
+    records: Arc<Mutex<Vec<RawAttendanceMock>>>,
+) -> Result<()> {
     let mut session_id = 0;
 
     loop {
@@ -94,7 +97,9 @@ fn handle_device_client(mut stream: TcpStream, records: Arc<Mutex<Vec<RawAttenda
         if p1 != MACHINE_PREPARE_DATA_1 || p2 != MACHINE_PREPARE_DATA_2 {
             bail!("Invalid ZKTeco TCP packet signature");
         }
-        let packet_len = u32::from_le_bytes([tcp_header[4], tcp_header[5], tcp_header[6], tcp_header[7]]) as usize;
+        let packet_len =
+            u32::from_le_bytes([tcp_header[4], tcp_header[5], tcp_header[6], tcp_header[7]])
+                as usize;
         let mut packet = vec![0u8; packet_len];
         if stream.read_exact(&mut packet).is_err() {
             break;
@@ -129,7 +134,11 @@ fn handle_device_client(mut stream: TcpStream, records: Arc<Mutex<Vec<RawAttenda
                     record_bytes.push(r.punch);
                 }
                 let declared_size = record_bytes.len() as u32;
-                let payload = [declared_size.to_le_bytes().as_slice(), record_bytes.as_slice()].concat();
+                let payload = [
+                    declared_size.to_le_bytes().as_slice(),
+                    record_bytes.as_slice(),
+                ]
+                .concat();
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else if sub_cmd == CMD_USERTEMP_RRQ {
@@ -192,7 +201,7 @@ fn calc_checksum(data: &[u8]) -> u16 {
             checksum -= USHRT_MAX as u32;
         }
     }
-    (!(checksum as u16)) & 0xffff
+    !(checksum as u16)
 }
 
 /// Run a mock HRMS webhook API server.
@@ -220,7 +229,10 @@ pub fn run_hrms(port: u16) -> Result<()> {
     Ok(())
 }
 
-fn handle_hrms_client(mut stream: TcpStream, received_events: Arc<Mutex<Vec<serde_json::Value>>>) -> Result<()> {
+fn handle_hrms_client(
+    mut stream: TcpStream,
+    received_events: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> Result<()> {
     let mut buffer = [0u8; 65536];
     let read = stream.read(&mut buffer)?;
     let request = String::from_utf8_lossy(&buffer[..read]);

@@ -35,7 +35,10 @@ pub fn run_at(path: PathBuf) -> Result<()> {
             .default(false)
             .interact()?;
         if !reconfigure {
-            println!("{}", style("Setup cancelled. Existing config was left unchanged.").yellow());
+            println!(
+                "{}",
+                style("Setup cancelled. Existing config was left unchanged.").yellow()
+            );
             return Ok(());
         }
     }
@@ -48,10 +51,16 @@ pub fn run_at(path: PathBuf) -> Result<()> {
     println!();
     println!("{}", style("Setup completed successfully!").green().bold());
     println!("{}", style("Next steps:").underlined().bold());
-    println!("  1. Validate config: {}", style("./fingerbridge config validate").cyan());
-    println!("  2. Run diagnostics: {}", style("./fingerbridge doctor").cyan());
-    println!("  3. Run once:        {}", style("./fingerbridge once --device <DEVICE_CODE>").cyan());
-    println!("  4. Start service:   {}", style("./fingerbridge serve").cyan());
+    println!(
+        "  1. Validate config: {}",
+        style("./fbsy config validate").cyan()
+    );
+    println!("  2. Run diagnostics: {}", style("./fbsy doctor").cyan());
+    println!(
+        "  3. Run once:        {}",
+        style("./fbsy once --device <DEVICE_CODE>").cyan()
+    );
+    println!("  4. Start service:   {}", style("./fbsy serve").cyan());
     Ok(())
 }
 
@@ -141,7 +150,10 @@ fn collect_config() -> Result<BridgeConfig> {
 
 fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
     println!();
-    println!("{}", style(format!("--- Device {number} ---")).bold().cyan());
+    println!(
+        "{}",
+        style(format!("--- Device {number} ---")).bold().cyan()
+    );
 
     let device_ip: String = Input::new()
         .with_prompt("Device IP")

@@ -34,7 +34,7 @@ impl BridgeConfig {
         let vps_webhook_url = required_string(root, "vpsWebhookUrl", "config")?;
         let bridge_port = u16_from_value(
             root.get("bridgePort").or_else(|| root.get("port")),
-            DEFAULT_BRIDGE_PORT.into(),
+            DEFAULT_BRIDGE_PORT,
             "bridgePort",
             "config",
         )?;

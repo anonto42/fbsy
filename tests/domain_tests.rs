@@ -1,7 +1,5 @@
+use fingerbridge::domain::{event_type_from_punch, parse_timestamp, to_hrms_events, RawAttendance};
 use serde_json::json;
-use fingerbridge::domain::{
-    event_type_from_punch, parse_timestamp, to_hrms_events, RawAttendance,
-};
 
 #[test]
 fn punch_codes_match_python_bridge_behavior() {

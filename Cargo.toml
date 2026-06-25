@@ -6,6 +6,10 @@ description = "Native biometric attendance bridge for HRMS webhook ingestion"
 license = "Proprietary"
 publish = false
 
+[[bin]]
+name = "fbsy"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

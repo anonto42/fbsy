@@ -249,15 +249,15 @@ fn port_available(port: u16) -> bool {
 
 fn next_steps(report: &DoctorReport) -> Vec<String> {
     if !report.config_exists {
-        return vec!["fingerbridge setup".to_string()];
+        return vec!["fbsy setup".to_string()];
     }
     if !report.config_valid {
-        return vec!["fix config.json and run fingerbridge config validate".to_string()];
+        return vec!["fix config.json and run fbsy config validate".to_string()];
     }
     vec![
-        "fingerbridge doctor --deep".to_string(),
-        "fingerbridge once --device <DEVICE_CODE>".to_string(),
-        "fingerbridge serve".to_string(),
+        "fbsy doctor --deep".to_string(),
+        "fbsy once --device <DEVICE_CODE>".to_string(),
+        "fbsy serve".to_string(),
     ]
 }
 
@@ -287,7 +287,10 @@ fn print_report(report: &DoctorReport) {
         );
     }
     println!("Devices:    {}", report.device_count);
-    println!("Job polling: {}", enabled_styled(report.job_polling_enabled));
+    println!(
+        "Job polling: {}",
+        enabled_styled(report.job_polling_enabled)
+    );
     println!("Service:    {}", style(&report.service_status).yellow());
 
     for device in &report.devices {

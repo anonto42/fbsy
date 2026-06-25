@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+pass() { echo -e "${GREEN}[ok]${NC} $1"; }
+fail() { echo -e "${RED}[fail]${NC} $1"; exit 1; }
+info() { echo -e "${YELLOW}[fbsy pre-commit]${NC} $1"; }
+
+info "Running pre-commit checks..."
+
+# 1. Formatting
+info "cargo fmt --check"
+if ! cargo fmt --all -- --check 2>&1; then
+  fail "Format check failed. Run: cargo fmt --all"
+fi
+pass "formatting"
+
+# 2. Linting
+info "cargo clippy"
+if ! cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+  fail "Clippy found warnings. Fix them or suppress with #[allow(...)]."
+fi
+pass "clippy"
+
+# 3. Tests
+info "cargo test"
+if ! cargo test 2>&1; then
+  fail "Tests failed. Fix failing tests before committing."
+fi
+pass "tests"
+
+echo -e "${GREEN}All pre-commit checks passed.${NC}"

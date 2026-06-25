@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
-use serde_json::json;
 use fingerbridge::config::{BridgeConfig, ConfigError};
+use serde_json::json;
 
 #[test]
 fn config_example_exists() {

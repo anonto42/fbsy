@@ -10,8 +10,8 @@ use crate::application;
 use super::{
     args::Cli,
     command::{
-        AutostartCommand, Command, ConfigCommand, DevicesCommand, LogsCommand, WebhookCommand,
-        TestServerCommand,
+        AutostartCommand, Command, ConfigCommand, DevicesCommand, LogsCommand, TestServerCommand,
+        WebhookCommand,
     },
 };
 
@@ -61,7 +61,9 @@ pub fn run(cli: Cli) -> Result<()> {
             AutostartCommand::Uninstall => application::autostart::uninstall(),
         },
         Command::TestServer { command } => match command {
-            TestServerCommand::Device { port, records } => application::test_server::run_device(port, records),
+            TestServerCommand::Device { port, records } => {
+                application::test_server::run_device(port, records)
+            }
             TestServerCommand::Hrms { port } => application::test_server::run_hrms(port),
         },
     }

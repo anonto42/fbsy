@@ -213,7 +213,7 @@ fn calc_checksum(data: &[u8]) -> u16 {
             checksum -= USHRT_MAX as u32;
         }
     }
-    (!(checksum as u16)) & 0xffff
+    !(checksum as u16)
 }
 
 fn decode_attendance_payload(payload: &[u8]) -> Result<Vec<RawAttendance>, DeviceError> {

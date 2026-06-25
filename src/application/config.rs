@@ -19,7 +19,11 @@ pub fn validate(path: Option<PathBuf>) -> Result<()> {
     let store = JsonConfigStore;
     // Loading through the store also validates the config.
     let _cfg = store.load(&path)?;
-    println!("{} Config is valid: {}", style("✔").green().bold(), style(path.display()).yellow());
+    println!(
+        "{} Config is valid: {}",
+        style("✔").green().bold(),
+        style(path.display()).yellow()
+    );
     Ok(())
 }
 

@@ -7,7 +7,7 @@ use clap::Parser;
 use super::command::Command;
 
 #[derive(Debug, Parser)]
-#[command(name = "fingerbridge")]
+#[command(name = "fbsy")]
 #[command(about = "Native biometric attendance bridge for HRMS webhook ingestion")]
 #[command(version)]
 /// Top-level CLI shape parsed from terminal arguments.
