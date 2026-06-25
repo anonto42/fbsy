@@ -1,0 +1,20 @@
+{
+  "_comment": "Local mock test config. Start the Python mock device on port 14370 and mock HRMS on port 18800.",
+  "vpsWebhookUrl": "http://127.0.0.1:18800/webhook",
+  "bridgePort": 7431,
+  "devices": [
+    {
+      "deviceIp": "127.0.0.1",
+      "devicePort": 14370,
+      "devicePassword": 0,
+      "deviceTimeout": 15,
+      "deviceForceUdp": false,
+      "deviceOmitPing": true,
+      "deviceCode": "MOCK-GATE-01",
+      "organizationId": 1,
+      "apiKey": "mock-api-key",
+      "clearAttendanceAfterSync": false,
+      "syncIntervalSeconds": 300
+    }
+  ]
+}
