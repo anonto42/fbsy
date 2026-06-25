@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ── 1. Always: fmt + clippy + test ─────────────────────────────────────────
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
@@ -23,7 +24,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry + build
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -31,8 +32,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -43,43 +43,153 @@ jobs:
       - name: cargo test
         run: cargo test --all
 
-  auto-tag:
-    name: Auto-tag release
+  # ── 2. Push to main only: decide whether a new release is needed ────────────
+  version-check:
+    name: Check if version is new
     needs: check
     runs-on: ubuntu-latest
-    # Only run on direct pushes to main, not on PRs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      tag: ${{ steps.check.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect version and check for existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          TAG="v$VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $TAG does not exist — will build and release."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 3. Build binaries for all platforms (only when releasing) ───────────────
+  build:
+    name: Build ${{ matrix.artifact }}
+    needs: version-check
+    if: needs.version-check.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux — static musl binary works on Debian, Arch, Fedora, Alpine
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: fbsy-linux-x86_64
+            ext: ""
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: fbsy-linux-aarch64
+            ext: ""
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: fbsy-windows-x86_64
+            ext: ".exe"
+
+          # macOS Intel
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: fbsy-macos-intel
+            ext: ""
+
+          # macOS Apple Silicon (M1/M2/M3)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: fbsy-macos-arm64
+            ext: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install musl tools (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          fi
+
+      - name: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          src="target/${{ matrix.target }}/release/fbsy${{ matrix.ext }}"
+          dst="${{ matrix.artifact }}${{ matrix.ext }}"
+          cp "$src" "$dst"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  # ── 4. Create GitHub Release with all binaries ──────────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [version-check, build]
+    if: needs.version-check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
 
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
+          path: dist/
 
-      - name: Read version from Cargo.toml
-        id: version
+      - name: Generate SHA-256 checksums
         run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "version=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Detected version: v$VERSION"
+          cd dist
+          find . -type f | sort | while read f; do
+            sha256sum "$f" | sed 's|  \./|  |'
+          done > ../checksums.txt
+          cat ../checksums.txt
 
-      - name: Check if tag already exists
-        id: tag_check
-        run: |
-          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.version.outputs.version }} already exists — skipping release."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.version.outputs.version }} does not exist — will create."
-          fi
-
-      - name: Create and push tag
-        if: steps.tag_check.outputs.exists == 'false'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.version.outputs.version }}"
-          git push origin "${{ steps.version.outputs.version }}"
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version-check.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*/*
+            checksums.txt

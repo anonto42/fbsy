@@ -1,14 +1,17 @@
-name: Release
+name: Release (manual)
 
+# Manual re-release trigger — normally releases are created automatically by ci.yml.
+# Use this only to rebuild and re-publish an existing version tag.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to release (e.g. v0.1.0)'
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  BIN: fbsy
 
 jobs:
   build:
@@ -19,7 +22,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── Linux (static musl — runs on Debian, Arch, Fedora, Alpine, etc.) ──
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: fbsy-linux-x86_64
@@ -30,19 +32,16 @@ jobs:
             artifact: fbsy-linux-aarch64
             ext: ""
 
-          # ── Windows ──
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: fbsy-windows-x86_64
             ext: ".exe"
 
-          # ── macOS Intel ──
           - os: macos-13
             target: x86_64-apple-darwin
             artifact: fbsy-macos-intel
             ext: ""
 
-          # ── macOS Apple Silicon (M1/M2/M3) ──
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: fbsy-macos-arm64
@@ -50,6 +49,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
 
       - name: Install Rust stable + target
         uses: dtolnay/rust-toolchain@stable
@@ -64,32 +65,25 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-      # musl cross-compilation needs musl-tools + cross-linker on Ubuntu
       - name: Install musl tools (Linux only)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools
-          # aarch64 cross-linker
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           fi
 
-      - name: cargo test (native targets only)
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-apple-darwin'
-        run: cargo test --all
-
       - name: cargo build --release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Rename binary
+      - name: Stage binary
         shell: bash
         run: |
-          src="target/${{ matrix.target }}/release/${BIN}${{ matrix.ext }}"
+          src="target/${{ matrix.target }}/release/fbsy${{ matrix.ext }}"
           dst="${{ matrix.artifact }}${{ matrix.ext }}"
           cp "$src" "$dst"
 
@@ -101,7 +95,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Create GitHub Release
+    name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
 
@@ -111,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: dist/
@@ -119,13 +113,16 @@ jobs:
       - name: Generate SHA-256 checksums
         run: |
           cd dist
-          find . -type f | sort | xargs sha256sum > ../checksums.txt
+          find . -type f | sort | while read f; do
+            sha256sum "$f" | sed 's|  \./|  |'
+          done > ../checksums.txt
           cat ../checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag }}
           generate_release_notes: true
           files: |
-            dist/**/*
+            dist/*/*
             checksums.txt
