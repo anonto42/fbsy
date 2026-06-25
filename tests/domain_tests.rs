@@ -1,0 +1,84 @@
+use serde_json::json;
+use zkteco_bridge::domain::{
+    event_type_from_punch, parse_timestamp, to_hrms_events, RawAttendance,
+};
+
+#[test]
+fn punch_codes_match_python_bridge_behavior() {
+    assert_eq!(event_type_from_punch(0), "check_in");
+    assert_eq!(event_type_from_punch(4), "check_in");
+    assert_eq!(event_type_from_punch(1), "check_out");
+    assert_eq!(event_type_from_punch(99), "check_out");
+}
+
+#[test]
+fn naive_timestamp_is_treated_as_utc_for_python_parity() {
+    let parsed = parse_timestamp("2026-05-21T10:15:00").expect("timestamp parses");
+    assert_eq!(parsed, "2026-05-21T10:15:00+00:00");
+}
+
+#[test]
+fn aware_timestamp_keeps_its_offset() {
+    let parsed = parse_timestamp("2026-05-21T12:00:00+06:00").expect("timestamp parses");
+    assert_eq!(parsed, "2026-05-21T12:00:00+06:00");
+}
+
+#[test]
+fn invalid_timestamp_returns_none() {
+    assert_eq!(parse_timestamp("not-a-date"), None);
+}
+
+#[test]
+fn hrms_events_skip_malformed_records_and_sort_by_timestamp() {
+    let events = to_hrms_events(&[
+        RawAttendance {
+            user_id: "42".to_string(),
+            timestamp: "2026-05-21T10:20:00".to_string(),
+            punch: 1,
+        },
+        RawAttendance {
+            user_id: "".to_string(),
+            timestamp: "2026-05-21T10:10:00".to_string(),
+            punch: 0,
+        },
+        RawAttendance {
+            user_id: "11".to_string(),
+            timestamp: "not-a-date".to_string(),
+            punch: 0,
+        },
+        RawAttendance {
+            user_id: "7".to_string(),
+            timestamp: "2026-05-21T10:05:00".to_string(),
+            punch: 0,
+        },
+    ]);
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].device_employee_id, "7");
+    assert_eq!(events[0].event_type, "check_in");
+    assert_eq!(events[1].device_employee_id, "42");
+    assert_eq!(events[1].event_type, "check_out");
+}
+
+#[test]
+fn event_serializes_to_exact_hrms_field_names() {
+    let event = to_hrms_events(&[RawAttendance {
+        user_id: "001".to_string(),
+        timestamp: "2026-06-25T02:30:00Z".to_string(),
+        punch: 0,
+    }])
+    .into_iter()
+    .next()
+    .expect("event");
+
+    let value = serde_json::to_value(event).expect("serialize event");
+    assert_eq!(
+        value,
+        json!({
+            "deviceEmployeeId": "001",
+            "timestamp": "2026-06-25T02:30:00+00:00",
+            "eventType": "check_in",
+            "verificationMethod": "zkteco_bridge"
+        })
+    );
+}
