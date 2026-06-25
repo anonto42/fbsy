@@ -1,0 +1,6 @@
+/target
+/logs
+/config.json
+*.log
+*.tmp
+
