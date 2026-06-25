@@ -1,18 +1,23 @@
-//! ZKTeco TCP adapter — pyzk-compatible protocol for real devices.
+//! ZKTeco adapter — TCP and UDP transport, pyzk-compatible.
 //!
 //! Protocol flow (ported from pyzk/zk/base.py):
 //!
 //! 1. Connect: CMD_CONNECT. If CMD_ACK_UNAUTH, send CMD_AUTH with commkey.
 //! 2. Pull attendance via CMD_PREPARE_BUFFER (1503):
 //!    - CMD_DATA response: payload is inline.
-//!    - CMD_PREPARE_DATA response: read chunks via CMD_READ_BUFFER, then CMD_FREE_DATA.
-//! 3. Three wire record formats (8, 16, or 40 bytes each) depending on firmware.
-//!    Record size is determined from CMD_GET_FREE_SIZES or detected heuristically.
+//!    - CMD_PREPARE_DATA response: read chunks via CMD_READ_BUFFER, free with CMD_FREE_DATA.
+//! 3. Three wire record formats (8, 16, or 40 bytes) depending on device firmware.
 //! 4. Clear: CMD_CLEAR_ATTLOG.
+//!
+//! Transport differences (TCP vs UDP):
+//!   TCP — packet = [TCP_HDR(8)] + [ZK_HEADER(8)] + data
+//!         MAX_CHUNK = 65 472 bytes; chunks arrive via read_exact
+//!   UDP — packet = [ZK_HEADER(8)] + data   (no TCP framing)
+//!         MAX_CHUNK = 16 384 bytes; chunks arrive as multiple datagrams until CMD_ACK_OK
 
 use std::{
     io::{Read, Write},
-    net::TcpStream,
+    net::{TcpStream, UdpSocket},
     time::Duration,
 };
 
@@ -42,7 +47,9 @@ const CMD_READ_BUFFER: u16 = 1504;
 const CMD_ACK_OK: u16 = 2000;
 const CMD_ACK_UNAUTH: u16 = 2005;
 
-const MAX_CHUNK: usize = 0xff_c0; // 65 472 bytes per chunk
+const MAX_CHUNK_TCP: usize = 0xff_c0; // 65 472 — pyzk TCP value
+const MAX_CHUNK_UDP: usize = 16 * 1024; // 16 384 — pyzk UDP value
+const UDP_BUF: usize = 65_536; // max UDP datagram
 
 // ── Connector ────────────────────────────────────────────────────────────────
 
@@ -51,72 +58,94 @@ pub struct ZktecoTcpConnector;
 
 impl DeviceConnector for ZktecoTcpConnector {
     fn connect(&self, cfg: &BridgeDeviceConfig) -> Result<Box<dyn DeviceClient>, DeviceError> {
-        let address = format!("{}:{}", cfg.device_ip, cfg.device_port);
-        let timeout = Duration::from_secs(cfg.device_timeout);
-        let stream = TcpStream::connect(&address)
-            .map_err(|e| DeviceError::Message(format!("device connect failed: {e}")))?;
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|e| DeviceError::Message(format!("set read timeout: {e}")))?;
-        stream
-            .set_write_timeout(Some(timeout))
-            .map_err(|e| DeviceError::Message(format!("set write timeout: {e}")))?;
-
         if cfg.device_force_udp {
-            eprintln!("warning: deviceForceUdp = true is not yet supported — connecting via TCP");
-        }
-
-        let mut client = ZktecoTcpClient {
-            stream,
-            session_id: 0,
-            reply_id: USHRT_MAX - 1,
-        };
-
-        let resp = client.send_command(CMD_CONNECT, &[])?;
-
-        if resp.command == CMD_ACK_UNAUTH {
-            // Device requires password authentication.
-            client.session_id = resp.session_id;
-            client.reply_id = resp.reply_id;
-            let commkey = make_commkey(cfg.device_password as u32, resp.session_id);
-            let auth = client.send_command(CMD_AUTH, &commkey)?;
-            if auth.command != CMD_ACK_OK {
-                return Err(DeviceError::Message(format!(
-                    "authentication failed (cmd {})",
-                    auth.command
-                )));
-            }
-            client.session_id = auth.session_id;
-            client.reply_id = auth.reply_id;
-        } else if resp.command == CMD_ACK_OK {
-            client.session_id = resp.session_id;
-            client.reply_id = resp.reply_id;
+            connect_udp(cfg)
         } else {
-            return Err(DeviceError::Message(format!(
-                "connect returned command {}",
-                resp.command
-            )));
+            connect_tcp(cfg)
         }
-
-        Ok(Box::new(client))
     }
 }
 
-// ── Client ───────────────────────────────────────────────────────────────────
+fn connect_tcp(cfg: &BridgeDeviceConfig) -> Result<Box<dyn DeviceClient>, DeviceError> {
+    let address = format!("{}:{}", cfg.device_ip, cfg.device_port);
+    let timeout = Duration::from_secs(cfg.device_timeout);
+    let stream = TcpStream::connect(&address)
+        .map_err(|e| DeviceError::Message(format!("device connect failed: {e}")))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| DeviceError::Message(format!("set read timeout: {e}")))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|e| DeviceError::Message(format!("set write timeout: {e}")))?;
 
-pub struct ZktecoTcpClient {
-    stream: TcpStream,
+    let mut client = ZktecoClient {
+        transport: Transport::Tcp(stream),
+        session_id: 0,
+        reply_id: USHRT_MAX - 1,
+    };
+    authenticate(&mut client, cfg)?;
+    Ok(Box::new(client))
+}
+
+fn connect_udp(cfg: &BridgeDeviceConfig) -> Result<Box<dyn DeviceClient>, DeviceError> {
+    let timeout = Duration::from_secs(cfg.device_timeout);
+    let socket =
+        UdpSocket::bind("0.0.0.0:0").map_err(|e| DeviceError::Message(format!("udp bind: {e}")))?;
+    socket
+        .connect(format!("{}:{}", cfg.device_ip, cfg.device_port))
+        .map_err(|e| DeviceError::Message(format!("udp connect: {e}")))?;
+    socket
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| DeviceError::Message(format!("set udp timeout: {e}")))?;
+
+    let mut client = ZktecoClient {
+        transport: Transport::Udp(socket),
+        session_id: 0,
+        reply_id: USHRT_MAX - 1,
+    };
+    authenticate(&mut client, cfg)?;
+    Ok(Box::new(client))
+}
+
+/// Shared connect + optional password auth for both transports.
+fn authenticate(client: &mut ZktecoClient, cfg: &BridgeDeviceConfig) -> Result<(), DeviceError> {
+    let resp = client.send_command(CMD_CONNECT, &[])?;
+    if resp.command == CMD_ACK_UNAUTH {
+        let commkey = make_commkey(cfg.device_password as u32, resp.session_id);
+        let auth = client.send_command(CMD_AUTH, &commkey)?;
+        if auth.command != CMD_ACK_OK {
+            return Err(DeviceError::Message(format!(
+                "authentication failed (cmd {})",
+                auth.command
+            )));
+        }
+    } else if resp.command != CMD_ACK_OK {
+        return Err(DeviceError::Message(format!(
+            "connect returned command {}",
+            resp.command
+        )));
+    }
+    Ok(())
+}
+
+// ── Transport ─────────────────────────────────────────────────────────────────
+
+enum Transport {
+    Tcp(TcpStream),
+    Udp(UdpSocket),
+}
+
+// ── Client ────────────────────────────────────────────────────────────────────
+
+pub struct ZktecoClient {
+    transport: Transport,
     session_id: u16,
     reply_id: u16,
 }
 
-impl DeviceClient for ZktecoTcpClient {
+impl DeviceClient for ZktecoClient {
     fn pull_attendance(&mut self) -> Result<Vec<RawAttendance>, DeviceError> {
         let record_count = self.get_record_count().unwrap_or(0);
-        if record_count == 0 {
-            // Try anyway in case get_record_count failed (unsupported device).
-        }
-
         let raw = self.read_with_buffer(CMD_ATTLOG_RRQ, 0, 0)?;
         decode_attendance_data(&raw, record_count)
     }
@@ -154,26 +183,18 @@ impl DeviceClient for ZktecoTcpClient {
     }
 }
 
-impl ZktecoTcpClient {
-    /// How many attendance records the device currently holds.
-    /// Uses CMD_GET_FREE_SIZES; returns 0 on any failure.
+impl ZktecoClient {
     fn get_record_count(&mut self) -> Result<usize, DeviceError> {
         let resp = self.send_command(CMD_GET_FREE_SIZES, &[])?;
-        if resp.command != CMD_ACK_OK {
+        if resp.command != CMD_ACK_OK || resp.data.len() < 80 {
             return Ok(0);
         }
-        // Response: 20 × i32 LE. Field [8] is the attendance record count.
-        if resp.data.len() < 80 {
-            return Ok(0);
-        }
+        // 20 × i32 LE; field [8] = attendance record count.
         let count =
             i32::from_le_bytes([resp.data[32], resp.data[33], resp.data[34], resp.data[35]]);
         Ok(count.max(0) as usize)
     }
 
-    /// pyzk's read_with_buffer: sends CMD_PREPARE_BUFFER and collects the
-    /// payload whether it arrives inline (CMD_DATA) or in chunks
-    /// (CMD_PREPARE_DATA + CMD_READ_BUFFER).
     fn read_with_buffer(
         &mut self,
         sub_cmd: u8,
@@ -192,25 +213,26 @@ impl ZktecoTcpClient {
             CMD_DATA => Ok(resp.data),
 
             CMD_PREPARE_DATA => {
-                // Bytes [1..5] hold the total payload size (pyzk read_with_buffer).
                 if resp.data.len() < 5 {
                     return Err(DeviceError::Message(
                         "CMD_PREPARE_DATA: response too short".to_string(),
                     ));
                 }
+                // pyzk read_with_buffer uses data[1:5] for size.
                 let size =
                     u32::from_le_bytes([resp.data[1], resp.data[2], resp.data[3], resp.data[4]])
                         as usize;
 
+                let max_chunk = self.max_chunk();
                 let mut all_data = Vec::with_capacity(size);
-                let remain = size % MAX_CHUNK;
-                let full_chunks = (size - remain) / MAX_CHUNK;
+                let remain = size % max_chunk;
+                let full_chunks = (size - remain) / max_chunk;
                 let mut start = 0usize;
 
                 for _ in 0..full_chunks {
-                    let chunk = self.read_chunk(start, MAX_CHUNK)?;
+                    let chunk = self.read_chunk(start, max_chunk)?;
                     all_data.extend_from_slice(&chunk);
-                    start += MAX_CHUNK;
+                    start += max_chunk;
                 }
                 if remain > 0 {
                     let chunk = self.read_chunk(start, remain)?;
@@ -222,25 +244,59 @@ impl ZktecoTcpClient {
             }
 
             other => Err(DeviceError::Message(format!(
-                "read_with_buffer: unexpected response command {other}"
+                "read_with_buffer: unexpected response {other}"
             ))),
         }
     }
 
-    /// Read one chunk from the device's buffer (CMD_READ_BUFFER).
     fn read_chunk(&mut self, start: usize, size: usize) -> Result<Vec<u8>, DeviceError> {
         let mut cmd_data = Vec::with_capacity(8);
         cmd_data.extend_from_slice(&(start as i32).to_le_bytes());
         cmd_data.extend_from_slice(&(size as i32).to_le_bytes());
 
         let resp = self.send_command(CMD_READ_BUFFER, &cmd_data)?;
-        if resp.command != CMD_DATA {
-            return Err(DeviceError::Message(format!(
+        match resp.command {
+            CMD_DATA => Ok(resp.data),
+            // UDP: device sends CMD_PREPARE_DATA then streams datagrams until CMD_ACK_OK.
+            CMD_PREPARE_DATA => self.recv_udp_stream(size),
+            _ => Err(DeviceError::Message(format!(
                 "read_chunk: expected CMD_DATA, got {}",
                 resp.command
-            )));
+            ))),
         }
-        Ok(resp.data)
+    }
+
+    /// Receive multiple UDP datagrams until CMD_ACK_OK (pyzk UDP __recieve_chunk).
+    fn recv_udp_stream(&mut self, expected: usize) -> Result<Vec<u8>, DeviceError> {
+        let Transport::Udp(ref socket) = self.transport else {
+            return Err(DeviceError::Message(
+                "recv_udp_stream called on TCP transport".to_string(),
+            ));
+        };
+        let mut data: Vec<u8> = Vec::with_capacity(expected);
+        let mut buf = vec![0u8; 1024 + 8];
+        loop {
+            let n = socket
+                .recv(&mut buf)
+                .map_err(|e| DeviceError::Message(format!("udp recv stream: {e}")))?;
+            if n < 8 {
+                break;
+            }
+            let cmd = u16::from_le_bytes([buf[0], buf[1]]);
+            match cmd {
+                CMD_DATA => data.extend_from_slice(&buf[8..n]),
+                CMD_ACK_OK => break,
+                _ => break,
+            }
+        }
+        Ok(data)
+    }
+
+    fn max_chunk(&self) -> usize {
+        match self.transport {
+            Transport::Tcp(_) => MAX_CHUNK_TCP,
+            Transport::Udp(_) => MAX_CHUNK_UDP,
+        }
     }
 
     fn send_command(&mut self, command: u16, data: &[u8]) -> Result<ResponsePacket, DeviceError> {
@@ -248,18 +304,36 @@ impl ZktecoTcpClient {
         if self.reply_id == USHRT_MAX {
             self.reply_id = 0;
         }
-        let packet = make_tcp_packet(command, data, self.session_id, self.reply_id);
-        self.stream
-            .write_all(&packet)
-            .map_err(|e| DeviceError::Message(format!("device write failed: {e}")))?;
-        let resp = read_tcp_packet(&mut self.stream)?;
-        self.session_id = resp.session_id;
-        self.reply_id = resp.reply_id;
-        Ok(resp)
+        match &mut self.transport {
+            Transport::Tcp(stream) => {
+                let packet = make_tcp_packet(command, data, self.session_id, self.reply_id);
+                stream
+                    .write_all(&packet)
+                    .map_err(|e| DeviceError::Message(format!("tcp write: {e}")))?;
+                let resp = read_tcp_packet(stream)?;
+                self.session_id = resp.session_id;
+                self.reply_id = resp.reply_id;
+                Ok(resp)
+            }
+            Transport::Udp(socket) => {
+                let packet = make_raw_packet(command, data, self.session_id, self.reply_id);
+                socket
+                    .send(&packet)
+                    .map_err(|e| DeviceError::Message(format!("udp send: {e}")))?;
+                let mut buf = vec![0u8; UDP_BUF];
+                let n = socket
+                    .recv(&mut buf)
+                    .map_err(|e| DeviceError::Message(format!("udp recv: {e}")))?;
+                let resp = parse_raw_packet(&buf[..n])?;
+                self.session_id = resp.session_id;
+                self.reply_id = resp.reply_id;
+                Ok(resp)
+            }
+        }
     }
 }
 
-// ── Packet encoding / decoding ────────────────────────────────────────────────
+// ── Packet helpers ────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 struct ResponsePacket {
@@ -269,33 +343,46 @@ struct ResponsePacket {
     data: Vec<u8>,
 }
 
+/// TCP packet: [MACHINE_PREPARE_DATA_1(2), MACHINE_PREPARE_DATA_2(2), length(4),
+///              command(2), checksum(2), session_id(2), reply_id(2), data...]
 fn make_tcp_packet(command: u16, data: &[u8], session_id: u16, reply_id: u16) -> Vec<u8> {
-    let header_template: Vec<u8> = [
+    let zk = make_zk_header(command, data, session_id, reply_id);
+    let mut pkt = Vec::with_capacity(8 + zk.len());
+    pkt.extend_from_slice(&MACHINE_PREPARE_DATA_1.to_le_bytes());
+    pkt.extend_from_slice(&MACHINE_PREPARE_DATA_2.to_le_bytes());
+    pkt.extend_from_slice(&(zk.len() as u32).to_le_bytes());
+    pkt.extend_from_slice(&zk);
+    pkt
+}
+
+/// Raw/UDP packet: [command(2), checksum(2), session_id(2), reply_id(2), data...]
+fn make_raw_packet(command: u16, data: &[u8], session_id: u16, reply_id: u16) -> Vec<u8> {
+    make_zk_header(command, data, session_id, reply_id)
+}
+
+fn make_zk_header(command: u16, data: &[u8], session_id: u16, reply_id: u16) -> Vec<u8> {
+    let template: Vec<u8> = [
         command.to_le_bytes().as_slice(),
-        &0u16.to_le_bytes(),
-        &session_id.to_le_bytes(),
-        &reply_id.to_le_bytes(),
+        0u16.to_le_bytes().as_slice(),
+        session_id.to_le_bytes().as_slice(),
+        reply_id.to_le_bytes().as_slice(),
     ]
     .concat();
-    let checksum = calc_checksum(&[header_template.as_slice(), data].concat());
-
-    let mut packet = Vec::with_capacity(16 + data.len());
-    packet.extend_from_slice(&MACHINE_PREPARE_DATA_1.to_le_bytes());
-    packet.extend_from_slice(&MACHINE_PREPARE_DATA_2.to_le_bytes());
-    packet.extend_from_slice(&((8 + data.len()) as u32).to_le_bytes());
-    packet.extend_from_slice(&command.to_le_bytes());
-    packet.extend_from_slice(&checksum.to_le_bytes());
-    packet.extend_from_slice(&session_id.to_le_bytes());
-    packet.extend_from_slice(&reply_id.to_le_bytes());
-    packet.extend_from_slice(data);
-    packet
+    let checksum = calc_checksum(&[template.as_slice(), data].concat());
+    let mut hdr = Vec::with_capacity(8 + data.len());
+    hdr.extend_from_slice(&command.to_le_bytes());
+    hdr.extend_from_slice(&checksum.to_le_bytes());
+    hdr.extend_from_slice(&session_id.to_le_bytes());
+    hdr.extend_from_slice(&reply_id.to_le_bytes());
+    hdr.extend_from_slice(data);
+    hdr
 }
 
 fn read_tcp_packet(stream: &mut TcpStream) -> Result<ResponsePacket, DeviceError> {
     let mut hdr = [0u8; 8];
     stream
         .read_exact(&mut hdr)
-        .map_err(|e| DeviceError::Message(format!("device read header failed: {e}")))?;
+        .map_err(|e| DeviceError::Message(format!("tcp read header: {e}")))?;
 
     let p1 = u16::from_le_bytes([hdr[0], hdr[1]]);
     let p2 = u16::from_le_bytes([hdr[2], hdr[3]]);
@@ -304,19 +391,26 @@ fn read_tcp_packet(stream: &mut TcpStream) -> Result<ResponsePacket, DeviceError
             "invalid ZKTeco TCP header".to_string(),
         ));
     }
-
     let pkt_len = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
     if pkt_len < 8 {
         return Err(DeviceError::Message(format!(
             "ZKTeco packet too short: {pkt_len}"
         )));
     }
-
     let mut pkt = vec![0u8; pkt_len];
     stream
         .read_exact(&mut pkt)
-        .map_err(|e| DeviceError::Message(format!("device read packet failed: {e}")))?;
+        .map_err(|e| DeviceError::Message(format!("tcp read packet: {e}")))?;
+    parse_raw_packet(&pkt)
+}
 
+fn parse_raw_packet(pkt: &[u8]) -> Result<ResponsePacket, DeviceError> {
+    if pkt.len() < 8 {
+        return Err(DeviceError::Message(format!(
+            "ZKTeco packet too short: {}",
+            pkt.len()
+        )));
+    }
     Ok(ResponsePacket {
         command: u16::from_le_bytes([pkt[0], pkt[1]]),
         session_id: u16::from_le_bytes([pkt[4], pkt[5]]),
@@ -343,11 +437,9 @@ fn calc_checksum(data: &[u8]) -> u16 {
 
 // ── make_commkey ─────────────────────────────────────────────────────────────
 
-/// Derives the 4-byte commkey used in CMD_AUTH. Ported from pyzk's MakeKey.
+/// Derives the 4-byte commkey used in CMD_AUTH. Ported from pyzk MakeKey.
 fn make_commkey(key: u32, session_id: u16) -> [u8; 4] {
     const TICKS: u8 = 50;
-
-    // Reverse the bits of key.
     let mut k: u32 = 0;
     for i in 0..32u32 {
         k = if (key & (1 << i)) != 0 {
@@ -357,12 +449,8 @@ fn make_commkey(key: u32, session_id: u16) -> [u8; 4] {
         };
     }
     k = k.wrapping_add(session_id as u32);
-
-    // XOR each byte with b'Z', b'K', b'S', b'O'.
     let b = k.to_le_bytes();
     let xored = [b[0] ^ b'Z', b[1] ^ b'K', b[2] ^ b'S', b[3] ^ b'O'];
-
-    // Interpret as two LE u16s, then swap them.
     let h0 = u16::from_le_bytes([xored[0], xored[1]]);
     let h1 = u16::from_le_bytes([xored[2], xored[3]]);
     let swapped = [
@@ -371,21 +459,12 @@ fn make_commkey(key: u32, session_id: u16) -> [u8; 4] {
         h0.to_le_bytes()[0],
         h0.to_le_bytes()[1],
     ];
-
-    // XOR bytes 0, 1, 3 with TICKS; byte 2 is set to TICKS directly.
     let t = TICKS;
     [swapped[0] ^ t, swapped[1] ^ t, t, swapped[3] ^ t]
 }
 
 // ── Attendance decoding ───────────────────────────────────────────────────────
 
-/// Decode the raw payload returned by read_with_buffer for CMD_ATTLOG_RRQ.
-///
-/// The payload layout (matching pyzk's get_attendance):
-///   bytes 0..4  – total_size: number of record bytes that follow
-///   bytes 4..   – records
-///
-/// record_count is from CMD_GET_FREE_SIZES; 0 means unknown → detect from size.
 fn decode_attendance_data(
     payload: &[u8],
     record_count: usize,
@@ -397,7 +476,6 @@ fn decode_attendance_data(
     if total_size == 0 {
         return Ok(vec![]);
     }
-
     let records_end = (4 + total_size).min(payload.len());
     let records_data = &payload[4..records_end];
     if records_data.is_empty() {
@@ -422,89 +500,68 @@ fn decode_attendance_data(
     }
 }
 
-/// Choose record size heuristically when the device count is not available.
 fn detect_record_size(total_size: usize, data_len: usize) -> usize {
-    // Prefer 8-byte (oldest/simplest); only pick 16 or 40 when 8 does not fit.
-    let sizes = [8usize, 16, 40];
-    for &s in &sizes {
+    for &s in &[8usize, 16, 40] {
         if total_size.is_multiple_of(s) && data_len >= s {
             return s;
         }
     }
-    40 // fallback
+    40
 }
 
-/// 8-byte record: uid(u16), status(u8), timestamp(4B LE encoded), punch(u8)
 fn decode_8byte_records(data: &[u8]) -> Result<Vec<RawAttendance>, DeviceError> {
     let mut out = Vec::new();
     for rec in data.chunks_exact(8) {
         let uid = u16::from_le_bytes([rec[0], rec[1]]);
         let encoded_ts = u32::from_le_bytes([rec[3], rec[4], rec[5], rec[6]]);
-        let punch = rec[7] as i64;
         out.push(RawAttendance {
             user_id: uid.to_string(),
             timestamp: decode_timestamp(encoded_ts),
-            punch,
+            punch: rec[7] as i64,
         });
     }
     Ok(out)
 }
 
-/// 16-byte record: user_id(u32 LE), timestamp(4B), status(u8), punch(u8), …
 fn decode_16byte_records(data: &[u8]) -> Result<Vec<RawAttendance>, DeviceError> {
     let mut out = Vec::new();
     for rec in data.chunks_exact(16) {
         let user_id = u32::from_le_bytes([rec[0], rec[1], rec[2], rec[3]]);
         let encoded_ts = u32::from_le_bytes([rec[4], rec[5], rec[6], rec[7]]);
-        let punch = rec[9] as i64;
         out.push(RawAttendance {
             user_id: user_id.to_string(),
             timestamp: decode_timestamp(encoded_ts),
-            punch,
+            punch: rec[9] as i64,
         });
     }
     Ok(out)
 }
 
-/// 40-byte record: uid(u16), user_id(24B null-term str), status(u8),
-///                 timestamp(4B), punch(u8), padding(8B)
 fn decode_40byte_records(data: &[u8]) -> Result<Vec<RawAttendance>, DeviceError> {
     let mut out = Vec::new();
     for rec in data.chunks(40) {
-        if rec.len() < 40 {
-            break;
-        }
-        // Skip sentinel records (pyzk: b'\xff255\x00...')
-        if rec[0] == 0xff {
+        if rec.len() < 40 || rec[0] == 0xff {
             continue;
         }
-        let user_id_raw = &rec[2..26]; // 24 bytes
-        let user_id = user_id_raw
+        let user_id: String = rec[2..26]
             .iter()
             .copied()
             .take_while(|&b| b != 0)
             .map(|b| b as char)
-            .collect::<String>();
-
-        let encoded_ts = u32::from_le_bytes([rec[27], rec[28], rec[29], rec[30]]);
-        let punch = rec[31] as i64;
-
+            .collect();
         if user_id.is_empty() {
             continue;
         }
+        let encoded_ts = u32::from_le_bytes([rec[27], rec[28], rec[29], rec[30]]);
         out.push(RawAttendance {
             user_id,
             timestamp: decode_timestamp(encoded_ts),
-            punch,
+            punch: rec[31] as i64,
         });
     }
     Ok(out)
 }
 
-// ── Timestamp ────────────────────────────────────────────────────────────────
-
-/// Decode ZKTeco's packed timestamp (seconds since 2000-01-01 00:00:00 UTC).
-/// Formula from pyzk DecodeTime / zkemsdk.c.
 fn decode_timestamp(value: u32) -> String {
     let second = value % 60;
     let t = value / 60;
