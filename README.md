@@ -51,8 +51,8 @@ chmod +x fbsy-linux-x86_64        # Linux/macOS only
 # 1. Start the bridge — first run launches an interactive setup wizard
 fbsy run at-bridge
 
-# 2. See what's running
-fbsy show
+# 2. Watch everything in a live dashboard (or `fbsy show` for a static snapshot)
+fbsy dashboard
 
 # 3. Pull attendance once on demand
 fbsy at-bridge sync --once
@@ -61,6 +61,8 @@ fbsy at-bridge sync --once
 fbsy logs at-bridge
 fbsy close at-bridge
 ```
+
+`fbsy dashboard` is a full-screen live monitor — ↑/↓ select a service, `s` start, `x` stop, `r` restart, `l` toggle the log pane, `q` quit. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
 
 Local testing without real hardware — spin up the mock device + HRMS servers:
 ```bash
@@ -247,6 +249,7 @@ Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODE
 
 | Document | What it covers |
 |---|---|
+| [INSTALL_FLOW.md](docs/INSTALL_FLOW.md) | End-to-end install → setup → run → dashboard lifecycle |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer diagram, module responsibilities |
 | [CLI.md](docs/CLI.md) | All commands, flags, and examples |
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | Every config field with defaults and valid ranges |

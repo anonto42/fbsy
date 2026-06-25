@@ -103,8 +103,10 @@ pub fn run_at_bridge(config: Option<PathBuf>, interval: Option<u64>, no_poll: bo
     start_detached(ServiceKind::AtBridge, port, &args)
 }
 
-/// Common spawn path: refuse double-start, clear stale entry, spawn, record.
-fn start_detached(kind: ServiceKind, port: Option<u16>, args: &[String]) -> Result<()> {
+/// Print-free spawn: refuse double-start, clear stale entry, spawn detached,
+/// record the registry entry, and return the new pid. Shared by the CLI `run`
+/// commands and the TUI dashboard.
+pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> Result<u32> {
     paths::ensure_dirs()?;
 
     if let Some(entry) = registry::read(kind.name())? {
@@ -127,7 +129,43 @@ fn start_detached(kind: ServiceKind, port: Option<u16>, args: &[String]) -> Resu
             .map(|p| p.display().to_string())
             .unwrap_or_default(),
     })?;
+    Ok(pid)
+}
 
+/// Start a service with its default flags (used by the TUI dashboard). For
+/// `at-bridge` this requires an existing config — the wizard cannot run inside
+/// the dashboard's alternate screen.
+pub fn default_start(kind: ServiceKind) -> Result<u32> {
+    match kind {
+        ServiceKind::Zkteco => spawn_service(
+            kind,
+            Some(4370),
+            &[
+                "--port".to_string(),
+                "4370".to_string(),
+                "--records".to_string(),
+                "5".to_string(),
+            ],
+        ),
+        ServiceKind::Hrms => spawn_service(
+            kind,
+            Some(8800),
+            &["--port".to_string(), "8800".to_string()],
+        ),
+        ServiceKind::AtBridge => {
+            if !at_bridge_configured() {
+                bail!("at-bridge needs setup — run `fbsy at-bridge config setup`");
+            }
+            let port = load_bridge_port(&paths::default_config_path());
+            spawn_service(kind, port, &[])
+        }
+    }
+}
+
+/// CLI wrapper around [`spawn_service`] that prints the result.
+fn start_detached(kind: ServiceKind, port: Option<u16>, args: &[String]) -> Result<()> {
+    let pid = spawn_service(kind, port, args)?;
+    let log = paths::service_log_path(kind.name());
     println!(
         "{} {} started (pid {}). Logs: {}",
         style("✔").green().bold(),
@@ -159,12 +197,82 @@ pub fn exec_internal(service: &str, rest: &[String]) -> Result<()> {
     }
 }
 
+// ── Print-free core (shared by CLI commands and the TUI dashboard) ────────────
+
+/// Live status of one service.
+pub struct ServiceStatus {
+    pub kind: ServiceKind,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub port: Option<u16>,
+    pub uptime_secs: Option<i64>,
+}
+
+/// Status of every known service, in [`ServiceKind::all`] order. Auto-clears
+/// registry entries whose process is no longer alive.
+pub fn snapshot() -> Vec<ServiceStatus> {
+    let mut out = Vec::new();
+    for kind in ServiceKind::all() {
+        let entry = registry::read(kind.name()).ok().flatten();
+        match entry {
+            Some(e) if process::is_alive(e.pid, Some(&e.exe)) => {
+                out.push(ServiceStatus {
+                    kind,
+                    running: true,
+                    pid: Some(e.pid),
+                    port: e.port,
+                    uptime_secs: uptime_secs(&e.started_at),
+                });
+            }
+            Some(_) => {
+                // Stale entry — clear it and report stopped.
+                let _ = registry::clear(kind.name());
+                out.push(ServiceStatus {
+                    kind,
+                    running: false,
+                    pid: None,
+                    port: None,
+                    uptime_secs: None,
+                });
+            }
+            None => out.push(ServiceStatus {
+                kind,
+                running: false,
+                pid: None,
+                port: None,
+                uptime_secs: None,
+            }),
+        }
+    }
+    out
+}
+
+/// Print-free stop: terminate the service (if alive) and clear its registry
+/// entry. Returns whether a running process was signalled.
+pub fn stop_service(kind: ServiceKind) -> Result<bool> {
+    let Some(entry) = registry::read(kind.name())? else {
+        return Ok(false);
+    };
+    let was_alive = process::is_alive(entry.pid, Some(&entry.exe));
+    if was_alive {
+        process::terminate(entry.pid)?;
+    }
+    registry::clear(kind.name())?;
+    Ok(was_alive)
+}
+
+/// Whether the attendance bridge has a config file (the wizard can't run inside
+/// the TUI, so the dashboard checks this before offering to start `at-bridge`).
+pub fn at_bridge_configured() -> bool {
+    paths::default_config_path().exists()
+}
+
 // ── Management: show / close / status / logs ──────────────────────────────────
 
 /// Print a table of all services with liveness, pid, port, and uptime.
 pub fn show() -> Result<()> {
-    let entries = registry::list()?;
-    if entries.is_empty() {
+    let rows = snapshot();
+    if !rows.iter().any(|r| r.running) {
         println!(
             "No services running. Start one with {}.",
             style("fbsy run <service>").cyan()
@@ -180,29 +288,27 @@ pub fn show() -> Result<()> {
         style("PORT").bold(),
         style("UPTIME").bold()
     );
-    for entry in entries {
-        let alive = process::is_alive(entry.pid, Some(&entry.exe));
-        if !alive {
-            // Auto-clear stale entries as we surface them.
-            let _ = registry::clear(&entry.service);
+    for row in rows {
+        if !row.running {
+            continue;
         }
-        let status_cell = if alive {
-            style("running").green()
-        } else {
-            style("stopped").red()
-        };
-        let port = entry
+        let status_cell = style("running").green();
+        let pid = row.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+        let port = row
             .port
             .map(|p| p.to_string())
             .unwrap_or_else(|| "-".into());
-        let uptime = if alive {
-            format_uptime(&entry.started_at)
-        } else {
-            "-".to_string()
-        };
+        let uptime = row
+            .uptime_secs
+            .map(format_uptime_secs)
+            .unwrap_or_else(|| "-".into());
         println!(
             "{:<12} {:<9} {:<8} {:<6} {}",
-            entry.service, status_cell, entry.pid, port, uptime
+            row.kind.name(),
+            status_cell,
+            pid,
+            port,
+            uptime
         );
     }
     Ok(())
@@ -212,27 +318,14 @@ pub fn show() -> Result<()> {
 pub fn close(service: &str) -> Result<()> {
     let kind = ServiceKind::from_name(service)
         .ok_or_else(|| anyhow::anyhow!("unknown service '{service}'"))?;
-    let Some(entry) = registry::read(kind.name())? else {
-        println!("{} is not running.", kind.name());
-        return Ok(());
-    };
-
-    if process::is_alive(entry.pid, Some(&entry.exe)) {
-        let stopped = process::terminate(entry.pid)?;
-        registry::clear(kind.name())?;
-        if stopped {
-            println!(
-                "{} {} stopped (pid {}).",
-                style("✔").green().bold(),
-                kind.name(),
-                entry.pid
-            );
-        } else {
-            println!("{} was not running; cleared registry.", kind.name());
-        }
+    if stop_service(kind)? {
+        println!(
+            "{} {} stopped.",
+            style("✔").green().bold(),
+            style(kind.name()).cyan().bold()
+        );
     } else {
-        registry::clear(kind.name())?;
-        println!("{} was not running; cleared stale registry.", kind.name());
+        println!("{} is not running.", kind.name());
     }
     Ok(())
 }
@@ -274,15 +367,15 @@ pub fn logs(service: &str, lines: usize, follow: bool) -> Result<()> {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&log)?;
-    let all: Vec<&str> = content.lines().collect();
-    let start = all.len().saturating_sub(lines);
-    for line in &all[start..] {
+    for line in tail_lines(&log, lines) {
         println!("{line}");
     }
 
     if follow {
-        follow_log(&log, content.len())?;
+        let offset = std::fs::metadata(&log)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        follow_log(&log, offset)?;
     }
     Ok(())
 }
@@ -313,11 +406,23 @@ fn load_bridge_port(cfg_path: &std::path::Path) -> Option<u16> {
         .map(|cfg| cfg.bridge_port)
 }
 
+/// Seconds since an RFC 3339 start timestamp, or `None` if unparseable.
+fn uptime_secs(started_at: &str) -> Option<i64> {
+    started_at
+        .parse::<DateTime<Utc>>()
+        .ok()
+        .map(|started| (Utc::now() - started).num_seconds().max(0))
+}
+
+/// Format an RFC 3339 start timestamp as a compact uptime string.
 fn format_uptime(started_at: &str) -> String {
-    let Ok(started) = started_at.parse::<DateTime<Utc>>() else {
-        return "-".to_string();
-    };
-    let secs = (Utc::now() - started).num_seconds().max(0);
+    uptime_secs(started_at)
+        .map(format_uptime_secs)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format a duration in seconds as a compact uptime string (e.g. `2h5m`).
+pub fn format_uptime_secs(secs: i64) -> String {
     let (d, h, m, s) = (
         secs / 86400,
         (secs % 86400) / 3600,
@@ -333,6 +438,16 @@ fn format_uptime(started_at: &str) -> String {
     } else {
         format!("{s}s")
     }
+}
+
+/// Last `n` lines of a file, oldest-first. Empty if the file is missing.
+pub fn tail_lines(path: &std::path::Path, n: usize) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let all: Vec<&str> = content.lines().collect();
+    let start = all.len().saturating_sub(n);
+    all[start..].iter().map(|s| s.to_string()).collect()
 }
 
 // Manual parsers for the controlled arg vectors we generate in `start_detached`.

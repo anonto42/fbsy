@@ -19,6 +19,8 @@ pub enum Command {
 
     /// Start a service as a detached background process.
     Run(RunArgs),
+    /// Live full-screen dashboard to monitor and control services.
+    Dashboard,
     /// List all services with status, pid, port, and uptime.
     Show,
     /// Stop a running service.

@@ -25,6 +25,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Uninstall => application::install::uninstall(),
 
         Command::Run(args) => dispatch_run(args.service),
+        Command::Dashboard => application::dashboard::run(),
         Command::Show => application::service::show(),
         Command::Close(sel) => application::service::close(&sel.service),
         Command::Status(sel) => application::service::status(&sel.service),

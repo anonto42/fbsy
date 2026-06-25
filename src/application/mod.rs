@@ -4,6 +4,7 @@
 //! these functions; device/webhook/file details stay behind ports and adapters.
 
 pub mod config;
+pub mod dashboard;
 pub mod doctor;
 pub mod install;
 pub mod serve;
