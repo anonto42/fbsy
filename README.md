@@ -10,9 +10,25 @@ ZKTeco Device  ──TCP 4370──▶  fbsy (office machine)  ──HTTPS JSON�
 
 ---
 
-## Download
+## Install
 
-Grab the binary for your platform from the [Releases](../../releases) page — no installer, no runtime, no dependencies.
+**Linux / macOS** — one line, detects your OS/arch, downloads the right binary, and sets up PATH:
+```bash
+curl -fsSL https://raw.githubusercontent.com/anonto42/fbsy/main/scripts/install.sh | sh
+```
+
+**Windows** (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/anonto42/fbsy/main/scripts/install.ps1 | iex
+```
+
+Then open a new shell and run `fbsy --help`.
+
+The installer honors `FBSY_VERSION` (pin a version), `FBSY_INSTALL_DIR` (custom bin dir), and `FBSY_NO_VERIFY=1` (skip checksum). Prefer to inspect first? Download the script, read it, then run it.
+
+### Manual download
+
+Or grab the binary for your platform from the [Releases](../../releases) page and run `fbsy install` yourself:
 
 | Platform | File |
 |---|---|
@@ -22,9 +38,9 @@ Grab the binary for your platform from the [Releases](../../releases) page — n
 | macOS Intel | `fbsy-macos-intel` |
 | macOS Apple Silicon (M1/M2/M3) | `fbsy-macos-arm64` |
 
-On Linux/macOS, make it executable after downloading:
 ```bash
-chmod +x fbsy-linux-x86_64
+chmod +x fbsy-linux-x86_64        # Linux/macOS only
+./fbsy-linux-x86_64 install       # copies to ~/.local/bin, sets up PATH + data dirs
 ```
 
 ---
@@ -32,21 +48,25 @@ chmod +x fbsy-linux-x86_64
 ## Quick start
 
 ```bash
-# 1. Copy and fill in the example config
-cp config.example.json config.json
-# edit config.json with your device IP, webhook URL, and API key
+# 1. Start the bridge — first run launches an interactive setup wizard
+fbsy run at-bridge
 
-# 2. Validate config
-fbsy config validate
+# 2. See what's running
+fbsy show
 
-# 3. Check connectivity
-fbsy doctor --deep
+# 3. Pull attendance once on demand
+fbsy at-bridge sync --once
 
-# 4. Pull attendance once (safe — does not clear device by default)
-fbsy once
+# 4. Inspect / stop
+fbsy logs at-bridge
+fbsy close at-bridge
+```
 
-# 5. Run in serve mode (scheduler + HTTP API)
-fbsy serve
+Local testing without real hardware — spin up the mock device + HRMS servers:
+```bash
+fbsy run hrms              # mock HRMS webhook on :8800
+fbsy run zkteco            # mock ZKTeco device on :4370
+fbsy run at-bridge         # point its config at 127.0.0.1:8800 / 127.0.0.1:4370
 ```
 
 ---

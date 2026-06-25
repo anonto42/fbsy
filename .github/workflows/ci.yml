@@ -180,8 +180,9 @@ jobs:
       - name: Generate SHA-256 checksums
         run: |
           cd dist
+          : > ../checksums.txt
           find . -type f | sort | while read f; do
-            sha256sum "$f" | sed 's|  \./|  |'
+            sha256sum "$f" | awk -v b="$(basename "$f")" '{print $1"  "b}'
           done > ../checksums.txt
           cat ../checksums.txt
 
