@@ -1,7 +1,4 @@
-//! CLI dispatch.
-//!
-//! This file answers: "After parsing the command, which application use case
-//! should run?"
+//! CLI dispatch: route a parsed command into the application layer.
 
 use anyhow::Result;
 
@@ -10,65 +7,80 @@ use crate::application;
 use super::{
     args::Cli,
     command::{
-        AutostartCommand, Command, ConfigCommand, DevicesCommand, LogsCommand, TestServerCommand,
-        WebhookCommand,
+        AtBridgeCommand, Command, ConfigCommand, DevicesCommand, HrmsCommand, RunService,
+        WebhookCommand, ZktecoCommand,
     },
 };
 
 /// Dispatch a parsed command into the application layer.
 pub fn run(cli: Cli) -> Result<()> {
-    // Compatibility flags are checked first so old client scripts continue to work.
-    if cli.setup {
-        return application::setup::run();
-    }
-    if cli.once {
-        return application::sync_once::run(None, cli.device);
-    }
-    if cli.install_autostart {
-        return application::autostart::install();
-    }
-    if cli.uninstall_autostart {
-        return application::autostart::uninstall();
-    }
+    // No command -> show running services.
+    let command = match cli.command {
+        Some(command) => command,
+        None => return application::service::show(),
+    };
 
-    // If no command is given, behave like a friendly product shell.
-    match cli.command.unwrap_or(Command::Doctor {
-        json: false,
-        deep: false,
-        config: None,
-    }) {
-        Command::Doctor { json, deep, config } => application::doctor::run(config, json, deep),
-        Command::Setup => application::setup::run(),
-        Command::Once { device, config } => application::sync_once::run(config, device),
-        Command::Serve {
+    match command {
+        Command::Install => application::install::install(),
+        Command::Uninstall => application::install::uninstall(),
+
+        Command::Run(args) => dispatch_run(args.service),
+        Command::Show => application::service::show(),
+        Command::Close(sel) => application::service::close(&sel.service),
+        Command::Status(sel) => application::service::status(&sel.service),
+        Command::Logs(args) => application::service::logs(&args.service, args.lines, args.follow),
+
+        Command::AtBridge(args) => dispatch_at_bridge(args.command),
+
+        Command::Zkteco(args) => match args.command {
+            ZktecoCommand::Run { port, records } => application::service::run_zkteco(port, records),
+        },
+        Command::Hrms(args) => match args.command {
+            HrmsCommand::Run { port } => application::service::run_hrms(port),
+        },
+
+        Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
+    }
+}
+
+fn dispatch_run(service: RunService) -> Result<()> {
+    match service {
+        RunService::AtBridge {
+            config,
             interval,
             no_poll,
+        } => application::service::run_at_bridge(config, interval, no_poll),
+        RunService::Zkteco { port, records } => application::service::run_zkteco(port, records),
+        RunService::Hrms { port } => application::service::run_hrms(port),
+    }
+}
+
+fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
+    match command {
+        AtBridgeCommand::Run {
             config,
-        } => application::serve::run(interval, no_poll, config),
-        Command::Config { command } => match command {
+            interval,
+            no_poll,
+        } => application::service::run_at_bridge(config, interval, no_poll),
+        AtBridgeCommand::Sync { device, config, .. } => application::sync_once::run(config, device),
+        AtBridgeCommand::Config { command } => match command {
             ConfigCommand::Validate { path } => application::config::validate(path),
             ConfigCommand::Show { path } => application::config::show(path),
             ConfigCommand::Path => application::config::path(),
+            ConfigCommand::Setup { path } => match path {
+                Some(path) => application::setup::run_at(path),
+                None => application::setup::run(),
+            },
         },
-        Command::Devices { command } => match command {
+        AtBridgeCommand::Doctor { json, deep, config } => {
+            application::doctor::run(config, json, deep)
+        }
+        AtBridgeCommand::Devices { command } => match command {
             DevicesCommand::List { path } => application::config::devices_list(path),
             DevicesCommand::Test { code, path } => application::doctor::device_test(path, &code),
         },
-        Command::Webhook { command } => match command {
+        AtBridgeCommand::Webhook { command } => match command {
             WebhookCommand::Test { code, path } => application::doctor::webhook_test(path, &code),
-        },
-        Command::Logs { command } => match command {
-            LogsCommand::Path => application::doctor::logs_path(),
-        },
-        Command::Autostart { command } => match command {
-            AutostartCommand::Install => application::autostart::install(),
-            AutostartCommand::Uninstall => application::autostart::uninstall(),
-        },
-        Command::TestServer { command } => match command {
-            TestServerCommand::Device { port, records } => {
-                application::test_server::run_device(port, records)
-            }
-            TestServerCommand::Hrms { port } => application::test_server::run_hrms(port),
         },
     }
 }

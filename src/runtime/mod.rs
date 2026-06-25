@@ -4,6 +4,8 @@
 //! becomes a long-running service.
 
 pub mod job_poller;
+pub mod process;
+pub mod registry;
 pub mod scheduler;
 pub mod sync_state;
 

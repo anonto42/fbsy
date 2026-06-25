@@ -18,5 +18,7 @@ pub mod domain;
 pub mod ports;
 /// Long-running process concerns such as scheduling and shutdown.
 pub mod runtime;
+/// Service identity shared by the registry, process manager, and CLI.
+pub mod services;
 /// Small shared helpers for paths, redaction, and future logging setup.
 pub mod support;

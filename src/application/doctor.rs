@@ -18,7 +18,7 @@ use crate::{
     },
     config::{BridgeConfig, BridgeDeviceConfig},
     ports::{config_store::ConfigStore, device::DeviceConnector, hrms::HrmsClient},
-    support::paths::{default_config_path, default_log_dir},
+    support::paths::{default_config_path, log_dir},
 };
 
 /// Print local readiness and suggested next commands.
@@ -35,7 +35,7 @@ pub fn run(config: Option<PathBuf>, json: bool, deep: bool) -> Result<()> {
 
 /// Print the default log directory.
 pub fn logs_path() -> Result<()> {
-    println!("{}", default_log_dir().display());
+    println!("{}", log_dir().display());
     Ok(())
 }
 
@@ -128,7 +128,7 @@ fn build_report(config_path: &Path, deep: bool) -> DoctorReport {
     let executable_path = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|err| format!("unknown: {err}"));
-    let log_dir = default_log_dir();
+    let log_dir = log_dir();
     let config_exists = config_path.exists();
 
     let mut report = DoctorReport {
