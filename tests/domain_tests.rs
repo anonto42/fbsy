@@ -1,5 +1,5 @@
 use serde_json::json;
-use zkteco_bridge::domain::{
+use fingerbridge::domain::{
     event_type_from_punch, parse_timestamp, to_hrms_events, RawAttendance,
 };
 
@@ -78,7 +78,7 @@ fn event_serializes_to_exact_hrms_field_names() {
             "deviceEmployeeId": "001",
             "timestamp": "2026-06-25T02:30:00+00:00",
             "eventType": "check_in",
-            "verificationMethod": "zkteco_bridge"
+            "verificationMethod": "fingerbridge"
         })
     );
 }

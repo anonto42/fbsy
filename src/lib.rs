@@ -1,4 +1,4 @@
-//! Library root for the Rust ZKTeco bridge.
+//! Library root for FingerBridge.
 //!
 //! The binary (`main.rs`) depends on this library. Keeping behavior here makes
 //! the code easier to test and prevents the executable entrypoint from growing

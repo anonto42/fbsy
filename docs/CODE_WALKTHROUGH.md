@@ -77,8 +77,8 @@ use clap::Parser;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let cli = zkteco_bridge::cli::Cli::parse();
-    zkteco_bridge::cli::run(cli)
+    let cli = fingerbridge::cli::Cli::parse();
+    fingerbridge::cli::run(cli)
 }
 ```
 
@@ -88,7 +88,7 @@ What happens:
 2. Logging is initialized.
 3. `clap` reads terminal arguments.
 4. Those arguments become a typed `Cli` struct.
-5. The parsed CLI is passed to `zkteco_bridge::cli::run(cli)`.
+5. The parsed CLI is passed to `fingerbridge::cli::run(cli)`.
 
 Important keywords:
 
@@ -99,26 +99,26 @@ Important keywords:
 | `fn main()` | Program entrypoint |
 | `-> Result<()>` | Main can either succeed with `()` or return an error |
 | `let cli = ...` | Create a local variable named `cli` |
-| `zkteco_bridge::cli` | Access the library crate module named `cli` |
+| `fingerbridge::cli` | Access the library crate module named `cli` |
 
-## 3. Why `zkteco_bridge::...` Works
+## 3. Why `fingerbridge::...` Works
 
 The package name in `Cargo.toml` is:
 
 ```toml
-name = "zkteco-bridge"
+name = "fingerbridge"
 ```
 
 Rust converts the crate name to:
 
 ```rust
-zkteco_bridge
+fingerbridge
 ```
 
 So this:
 
 ```rust
-zkteco_bridge::cli::Cli
+fingerbridge::cli::Cli
 ```
 
 means:
@@ -206,7 +206,7 @@ What happens:
 2. `mod command;` loads `src/cli/command.rs`.
 3. `mod dispatch;` loads `src/cli/dispatch.rs`.
 4. `pub use args::Cli;` re-exports `Cli`.
-5. Other code can now write `zkteco_bridge::cli::Cli`.
+5. Other code can now write `fingerbridge::cli::Cli`.
 6. `run(cli)` forwards work into `dispatch::run(cli)`.
 
 Important keywords:
@@ -256,7 +256,7 @@ What happens:
 Example:
 
 ```bash
-zkteco-bridge doctor
+fingerbridge doctor
 ```
 
 becomes:
@@ -311,7 +311,7 @@ This file defines every command group the program understands.
 Example:
 
 ```bash
-zkteco-bridge serve --interval 120
+fingerbridge serve --interval 120
 ```
 
 becomes:

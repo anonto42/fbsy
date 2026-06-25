@@ -5,10 +5,10 @@ For developers working on the bridge itself.
 ## Layout
 
 ```
-zkteco-bridge/
+fingerbridge/
   agent.py                 compatibility launcher (python agent.py --once still works)
-  src/zkteco_bridge/       the importable package
-    __main__.py            python -m zkteco_bridge
+  src/fingerbridge/       the importable package
+    __main__.py            python -m fingerbridge
     cli.py                 argparse entrypoint, server + scheduler startup
     config.py              load/validate config.json, defaults, coercion
     exceptions.py          ConfigError, WebhookError (BridgeError base)
@@ -27,7 +27,7 @@ zkteco-bridge/
       logging_setup.py     console + rotating file logging
   tests/                   mirrored suite: conftest, test_api/core/models/config
   docs/                    INSTALLATION, DEVELOPMENT, EDGE_CASES
-  zkteco-bridge.spec       PyInstaller spec (per-OS output name)
+  fingerbridge.spec       PyInstaller spec (per-OS output name)
   build.sh / build.bat     local single-OS build
   .github/workflows/ci.yml CI: test + build all three OSes, release on tag
 ```
@@ -44,9 +44,9 @@ python3 -m pip install -r requirements-dev.txt
 ## Running locally
 
 ```bash
-python3 -m zkteco_bridge --once          # pull once, print JSON, exit (preferred)
-python3 -m zkteco_bridge                  # run server + scheduler (default interval)
-python3 -m zkteco_bridge --interval 120   # override interval (seconds)
+python3 -m fingerbridge --once          # pull once, print JSON, exit (preferred)
+python3 -m fingerbridge                  # run server + scheduler (default interval)
+python3 -m fingerbridge --interval 120   # override interval (seconds)
 python3 agent.py --once                   # compatibility shim, same behaviour
 ```
 
@@ -80,8 +80,8 @@ Everything uses fakes/mocks — no real device or network is touched.
 PyInstaller **cannot cross-compile** — each OS binary must be built on that OS.
 
 ```bash
-./build.sh        # macOS or Linux  -> dist/zkteco-bridge-macos | -linux
-build.bat         # Windows         -> dist/zkteco-bridge.exe
+./build.sh        # macOS or Linux  -> dist/fingerbridge-macos | -linux
+build.bat         # Windows         -> dist/fingerbridge.exe
 ```
 
 For all three at once, push a tag and let CI build them:

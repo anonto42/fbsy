@@ -11,23 +11,23 @@ cargo build --release
 Output:
 
 ```text
-target/release/zkteco-bridge
+target/release/fingerbridge
 ```
 
 On Windows:
 
 ```text
-target/release/zkteco-bridge.exe
+target/release/fingerbridge.exe
 ```
 
 ## Planned Release Artifacts
 
 ```text
-zkteco-bridge-linux-x86_64
-zkteco-bridge-linux-aarch64
-zkteco-bridge-macos-aarch64
-zkteco-bridge-macos-x86_64
-zkteco-bridge-windows-x86_64.exe
+fingerbridge-linux-x86_64
+fingerbridge-linux-aarch64
+fingerbridge-macos-aarch64
+fingerbridge-macos-x86_64
+fingerbridge-windows-x86_64.exe
 ```
 
 ## Runtime Files
@@ -35,7 +35,7 @@ zkteco-bridge-windows-x86_64.exe
 The binary should run with:
 
 ```text
-zkteco-bridge
+fingerbridge
 config.json
 logs/
 ```

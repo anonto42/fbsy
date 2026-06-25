@@ -95,7 +95,7 @@ fn post_json_once(url: &str, body: &str) -> Result<String, PostError> {
         .map_err(|err| PostError::Retryable(format!("set HRMS write timeout failed: {err}")))?;
 
     let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nAccept: application/json\r\nUser-Agent: ZKTecoBridgeRust/0.1.0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nAccept: application/json\r\nUser-Agent: FingerBridge/0.1.0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         parsed.path,
         parsed.host_header(),
         body.len(),

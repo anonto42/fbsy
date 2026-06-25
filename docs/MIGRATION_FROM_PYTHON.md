@@ -18,16 +18,16 @@ The Rust bridge should be behavior-compatible with the existing Python bridge.
 
 | Python File | Rust Module |
 | --- | --- |
-| `src/zkteco_bridge/cli.py` | `src/cli.rs` |
-| `src/zkteco_bridge/config.py` | `src/config.rs` |
-| `src/zkteco_bridge/core/device.py` | `src/device.rs` |
-| `src/zkteco_bridge/core/hrms.py` | `src/hrms.rs` |
-| `src/zkteco_bridge/core/sync.py` | `src/sync.rs` |
-| `src/zkteco_bridge/core/scheduler.py` | `src/scheduler.rs` |
-| `src/zkteco_bridge/core/setup.py` | `src/setup.rs` |
-| `src/zkteco_bridge/api/server.py` | `src/api.rs` later |
-| `src/zkteco_bridge/models/events.py` | `src/models.rs` |
-| `src/zkteco_bridge/utils/paths.py` | `src/paths.rs` |
+| `src/fingerbridge/cli.py` | `src/cli.rs` |
+| `src/fingerbridge/config.py` | `src/config.rs` |
+| `src/fingerbridge/core/device.py` | `src/device.rs` |
+| `src/fingerbridge/core/hrms.py` | `src/hrms.rs` |
+| `src/fingerbridge/core/sync.py` | `src/sync.rs` |
+| `src/fingerbridge/core/scheduler.py` | `src/scheduler.rs` |
+| `src/fingerbridge/core/setup.py` | `src/setup.rs` |
+| `src/fingerbridge/api/server.py` | `src/api.rs` later |
+| `src/fingerbridge/models/events.py` | `src/models.rs` |
+| `src/fingerbridge/utils/paths.py` | `src/paths.rs` |
 
 ## Migration Strategy
 

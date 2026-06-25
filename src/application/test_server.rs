@@ -35,7 +35,7 @@ struct RawAttendanceMock {
 pub fn run_device(port: u16, records_count: usize) -> Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
     println!(
-        "{} Mock ZKTeco device server listening on {} with {} records pre-populated.",
+        "{} Mock biometric device server listening on {} with {} records pre-populated.",
         style("✔").green().bold(),
         style(format!("0.0.0.0:{port}")).cyan().bold(),
         style(records_count).yellow().bold()

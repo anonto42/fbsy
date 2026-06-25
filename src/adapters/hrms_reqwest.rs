@@ -29,7 +29,7 @@ impl Default for ReqwestHrmsClient {
         Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
-                .user_agent(format!("ZKTecoBridgeRust/{}", env!("CARGO_PKG_VERSION")))
+                .user_agent(format!("FingerBridge/{}", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("reqwest client should build"),
         }

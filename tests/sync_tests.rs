@@ -3,7 +3,7 @@ use std::{
     thread,
 };
 
-use zkteco_bridge::{
+use fingerbridge::{
     config::BridgeDeviceConfig,
     domain::{DeviceUser, FingerTemplate, HrmsEvent, RawAttendance},
     ports::{

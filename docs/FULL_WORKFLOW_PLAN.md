@@ -1,6 +1,6 @@
 # Full Software Workflow Plan
 
-This document defines the complete intended behavior for the Rust ZKTeco Bridge, based on the existing Python bridge in `~/developer_workspace/projects/levelaxis/zkteco_bridge`.
+This document defines the complete intended behavior for the Rust ZKTeco Bridge, based on the existing Python bridge in `~/developer_workspace/projects/levelaxis/fingerbridge`.
 
 The goal is to design the full product workflow before implementing the remaining behavior.
 
@@ -13,7 +13,7 @@ ZKTeco device(s)
       |
       | LAN TCP/UDP 4370
       v
-zkteco-bridge Rust service
+fingerbridge Rust service
       |
       | HTTPS webhook / HRMS API
       v
@@ -59,9 +59,9 @@ The Python bridge currently supports:
 The user should be able to download a build and then run the command from any terminal directory:
 
 ```bash
-zkteco-bridge help
-zkteco-bridge doctor
-zkteco-bridge setup
+fingerbridge help
+fingerbridge doctor
+fingerbridge setup
 ```
 
 ### Install Layout
@@ -71,16 +71,16 @@ The installed program should create or use a stable install directory.
 Recommended locations:
 
 ```text
-Windows: C:\Program Files\LevelAxis\zkteco-bridge\
-Linux:   /opt/levelaxis/zkteco-bridge/
-macOS:   /Applications/ZKTeco Bridge/ or /usr/local/levelaxis/zkteco-bridge/
+Windows: C:\Program Files\LevelAxis\fingerbridge\
+Linux:   /opt/levelaxis/fingerbridge/
+macOS:   /Applications/ZKTeco Bridge/ or /usr/local/levelaxis/fingerbridge/
 ```
 
 For simple client installs, local-folder mode remains allowed:
 
 ```text
-zkteco-bridge/
-├── zkteco-bridge.exe       # or linux/macos binary
+fingerbridge/
+├── fingerbridge.exe       # or linux/macos binary
 ├── config.json
 └── logs/
 ```
@@ -90,15 +90,15 @@ zkteco-bridge/
 The installer should make this command available globally:
 
 ```bash
-zkteco-bridge
+fingerbridge
 ```
 
 Possible strategies:
 
 ```text
 Windows: add install folder to PATH or install shim
-Linux:   symlink /usr/local/bin/zkteco-bridge -> /opt/.../zkteco-bridge
-macOS:   symlink /usr/local/bin/zkteco-bridge -> install binary
+Linux:   symlink /usr/local/bin/fingerbridge -> /opt/.../fingerbridge
+macOS:   symlink /usr/local/bin/fingerbridge -> install binary
 ```
 
 ### Install Command Plan
@@ -106,7 +106,7 @@ macOS:   symlink /usr/local/bin/zkteco-bridge -> install binary
 Rust CLI command:
 
 ```bash
-zkteco-bridge install
+fingerbridge install
 ```
 
 Responsibilities:
@@ -123,7 +123,7 @@ Responsibilities:
 ### Uninstall Command Plan
 
 ```bash
-zkteco-bridge uninstall
+fingerbridge uninstall
 ```
 
 Responsibilities:
@@ -141,8 +141,8 @@ The bridge needs durable files outside the executable.
 Recommended data layout:
 
 ```text
-zkteco-bridge/
-├── zkteco-bridge          # executable
+fingerbridge/
+├── fingerbridge          # executable
 ├── config/
 │   └── config.json
 ├── logs/
@@ -167,7 +167,7 @@ Current compatibility mode can still support:
 Command:
 
 ```bash
-zkteco-bridge setup
+fingerbridge setup
 ```
 
 Behavior:
@@ -198,7 +198,7 @@ Behavior:
 Command:
 
 ```bash
-zkteco-bridge doctor
+fingerbridge doctor
 ```
 
 Doctor should report:
@@ -221,8 +221,8 @@ Doctor should report:
 Optional flags:
 
 ```bash
-zkteco-bridge doctor --deep
-zkteco-bridge doctor --json
+fingerbridge doctor --deep
+fingerbridge doctor --json
 ```
 
 `--deep` should also test:
@@ -236,8 +236,8 @@ zkteco-bridge doctor --json
 Commands:
 
 ```bash
-zkteco-bridge once
-zkteco-bridge once --device DEVICE_CODE
+fingerbridge once
+fingerbridge once --device DEVICE_CODE
 ```
 
 Behavior:
@@ -270,9 +270,9 @@ Never clear device attendance unless webhook upload succeeded.
 Command:
 
 ```bash
-zkteco-bridge serve
-zkteco-bridge serve --interval 120
-zkteco-bridge serve --no-poll
+fingerbridge serve
+fingerbridge serve --interval 120
+fingerbridge serve --no-poll
 ```
 
 Behavior:
@@ -380,11 +380,11 @@ PULL_TEMPLATES
 Commands:
 
 ```bash
-zkteco-bridge service install
-zkteco-bridge service uninstall
-zkteco-bridge service start
-zkteco-bridge service stop
-zkteco-bridge service status
+fingerbridge service install
+fingerbridge service uninstall
+fingerbridge service start
+fingerbridge service stop
+fingerbridge service status
 ```
 
 OS backends:
@@ -398,8 +398,8 @@ macOS:   launchd
 Compatibility aliases:
 
 ```bash
-zkteco-bridge --install-autostart
-zkteco-bridge --uninstall-autostart
+fingerbridge --install-autostart
+fingerbridge --uninstall-autostart
 ```
 
 ## Troubleshooting Commands
@@ -407,23 +407,23 @@ zkteco-bridge --uninstall-autostart
 Planned commands:
 
 ```bash
-zkteco-bridge help
-zkteco-bridge doctor
-zkteco-bridge doctor --deep
-zkteco-bridge config show
-zkteco-bridge config validate
-zkteco-bridge config path
-zkteco-bridge logs path
-zkteco-bridge logs tail
-zkteco-bridge once
-zkteco-bridge once --device CODE
-zkteco-bridge service status
-zkteco-bridge service restart
-zkteco-bridge devices list
-zkteco-bridge devices test CODE
-zkteco-bridge webhook test CODE
-zkteco-bridge templates pull --device CODE
-zkteco-bridge templates push --device CODE --file payload.json
+fingerbridge help
+fingerbridge doctor
+fingerbridge doctor --deep
+fingerbridge config show
+fingerbridge config validate
+fingerbridge config path
+fingerbridge logs path
+fingerbridge logs tail
+fingerbridge once
+fingerbridge once --device CODE
+fingerbridge service status
+fingerbridge service restart
+fingerbridge devices list
+fingerbridge devices test CODE
+fingerbridge webhook test CODE
+fingerbridge templates pull --device CODE
+fingerbridge templates push --device CODE --file payload.json
 ```
 
 ## Config Format Plan

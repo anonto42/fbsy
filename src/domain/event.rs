@@ -68,7 +68,7 @@ fn to_hrms_event(record: &RawAttendance) -> Option<HrmsEvent> {
         device_employee_id: device_employee_id.to_string(),
         timestamp: parse_timestamp(&record.timestamp)?,
         event_type: event_type_from_punch(record.punch).to_string(),
-        verification_method: "zkteco_bridge".to_string(),
+        verification_method: "fingerbridge".to_string(),
     })
 }
 

@@ -1,4 +1,4 @@
-# ZKTeco Bridge (Rust) — Full Build Spec
+# FingerBridge — Full Build Spec
 
 **Status:** authoritative build spec. Written against the **finalized** HRMS
 contract (after the webhook-only / job-polling cleanup — see the HRMS repo
@@ -25,7 +25,7 @@ It does exactly two jobs:
 ```
 
 ```text
-ZKTeco device(s) ──TCP 4370──► zkteco-bridge ──HTTPS──► HRMS (api/v1)
+ZKTeco device(s) ──TCP 4370──► fingerbridge ──HTTPS──► HRMS (api/v1)
                                    │  - scheduler (per-device interval)
                                    │  - sync engine (pull → map → forward → clear?)
                                    │  - job poller (PUSH_USER / PULL_TEMPLATES)
@@ -66,7 +66,7 @@ Request body:
       "deviceEmployeeId": "001",            // string — the user id enrolled on the device
       "timestamp": "2026-06-25T02:30:00Z",  // string — ISO 8601 (see §4 on timezone)
       "eventType": "check_in",              // "check_in" | "check_out"
-      "verificationMethod": "zkteco_bridge" // optional string
+      "verificationMethod": "fingerbridge" // optional string
     }
   ]
 }
@@ -257,7 +257,7 @@ Raw device punch → HRMS event, preserving the Python behavior exactly:
   the correct local day; if devices are not on UTC, the bridge must apply the
   device's real offset so the instant is correct.
 - Sort events ascending by timestamp before sending.
-- `verificationMethod`: `"zkteco_bridge"`.
+- `verificationMethod`: `"fingerbridge"`.
 
 ---
 
@@ -315,14 +315,14 @@ every jobPollIntervalSeconds:
 ## 8. CLI commands
 
 ```bash
-zkteco-bridge doctor                 # readiness + config path/status
-zkteco-bridge setup                  # interactive config wizard (dialoguer)
-zkteco-bridge once [--device CODE]   # one sync (all or one device), print JSON, exit 0/1
-zkteco-bridge serve [--interval N] [--no-poll]   # HTTP API + schedulers + poller
-zkteco-bridge config validate | show | path
-zkteco-bridge devices list | test CODE
-zkteco-bridge webhook test CODE
-zkteco-bridge service install | uninstall | status   # systemd/launchd/Task Scheduler
+fingerbridge doctor                 # readiness + config path/status
+fingerbridge setup                  # interactive config wizard (dialoguer)
+fingerbridge once [--device CODE]   # one sync (all or one device), print JSON, exit 0/1
+fingerbridge serve [--interval N] [--no-poll]   # HTTP API + schedulers + poller
+fingerbridge config validate | show | path
+fingerbridge devices list | test CODE
+fingerbridge webhook test CODE
+fingerbridge service install | uninstall | status   # systemd/launchd/Task Scheduler
 ```
 
 Compatibility aliases: `--once`, `--setup`, `--interval`, `--install-autostart`,

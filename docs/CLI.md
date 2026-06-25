@@ -24,24 +24,24 @@ comfy-table = "7"
 Recommended command style:
 
 ```bash
-zkteco-bridge doctor
-zkteco-bridge setup
-zkteco-bridge once
-zkteco-bridge serve --interval 120
-zkteco-bridge config validate
-zkteco-bridge config show
-zkteco-bridge autostart install
-zkteco-bridge autostart uninstall
+fingerbridge doctor
+fingerbridge setup
+fingerbridge once
+fingerbridge serve --interval 120
+fingerbridge config validate
+fingerbridge config show
+fingerbridge autostart install
+fingerbridge autostart uninstall
 ```
 
 Compatibility flags from the Python version:
 
 ```bash
-zkteco-bridge --setup
-zkteco-bridge --once
-zkteco-bridge --interval 120
-zkteco-bridge --install-autostart
-zkteco-bridge --uninstall-autostart
+fingerbridge --setup
+fingerbridge --once
+fingerbridge --interval 120
+fingerbridge --install-autostart
+fingerbridge --uninstall-autostart
 ```
 
 ## Command Responsibilities
@@ -67,7 +67,7 @@ Config:  missing
 Path:    ./config.json
 
 Next:
-  zkteco-bridge setup
-  zkteco-bridge config validate
+  fingerbridge setup
+  fingerbridge config validate
 ```
 

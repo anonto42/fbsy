@@ -25,7 +25,7 @@ pub fn run() -> Result<()> {
 
 /// Run setup for a specific config path. Kept separate for tests.
 pub fn run_at(path: PathBuf) -> Result<()> {
-    println!("{}", style("ZKTeco Bridge Setup Wizard").cyan().bold());
+    println!("{}", style("FingerBridge Setup Wizard").cyan().bold());
     println!("Config path: {}", style(path.display()).yellow());
     println!();
 
@@ -48,10 +48,10 @@ pub fn run_at(path: PathBuf) -> Result<()> {
     println!();
     println!("{}", style("Setup completed successfully!").green().bold());
     println!("{}", style("Next steps:").underlined().bold());
-    println!("  1. Validate config: {}", style("./zkteco-bridge config validate").cyan());
-    println!("  2. Run diagnostics: {}", style("./zkteco-bridge doctor").cyan());
-    println!("  3. Run once:        {}", style("./zkteco-bridge once --device <DEVICE_CODE>").cyan());
-    println!("  4. Start service:   {}", style("./zkteco-bridge serve").cyan());
+    println!("  1. Validate config: {}", style("./fingerbridge config validate").cyan());
+    println!("  2. Run diagnostics: {}", style("./fingerbridge doctor").cyan());
+    println!("  3. Run once:        {}", style("./fingerbridge once --device <DEVICE_CODE>").cyan());
+    println!("  4. Start service:   {}", style("./fingerbridge serve").cyan());
     Ok(())
 }
 
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn atomic_save_writes_pretty_json() {
         let dir =
-            std::env::temp_dir().join(format!("zkteco-bridge-setup-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("fingerbridge-setup-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("config.json");
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn backup_existing_config_creates_backup_file() {
         let dir =
-            std::env::temp_dir().join(format!("zkteco-bridge-backup-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("fingerbridge-backup-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("config.json");

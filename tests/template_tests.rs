@@ -1,4 +1,4 @@
-use zkteco_bridge::domain::{FingerTemplate, FingerTemplatePayload};
+use fingerbridge::domain::{FingerTemplate, FingerTemplatePayload};
 
 #[test]
 fn finger_template_payload_encodes_bytes_as_base64() {

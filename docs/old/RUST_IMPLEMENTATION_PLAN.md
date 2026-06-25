@@ -87,12 +87,12 @@ If it grows, split it into crates:
 
 ```text
 crates/
-├── zkteco-bridge-cli/
-├── zkteco-bridge-core/
-├── zkteco-bridge-config/
-├── zkteco-bridge-device/
-├── zkteco-bridge-hrms/
-└── zkteco-bridge-api/
+├── fingerbridge-cli/
+├── fingerbridge-core/
+├── fingerbridge-config/
+├── fingerbridge-device/
+├── fingerbridge-hrms/
+└── fingerbridge-api/
 ```
 
 ## Step-By-Step Behavior And Rust Mapping
@@ -119,23 +119,23 @@ crates/
 Preserve the current flags where needed:
 
 ```bash
-zkteco-bridge --setup
-zkteco-bridge --once
-zkteco-bridge --interval 120
-zkteco-bridge --install-autostart
-zkteco-bridge --uninstall-autostart
+fingerbridge --setup
+fingerbridge --once
+fingerbridge --interval 120
+fingerbridge --install-autostart
+fingerbridge --uninstall-autostart
 ```
 
 Recommended command style for the Rust version:
 
 ```bash
-zkteco-bridge setup
-zkteco-bridge once
-zkteco-bridge serve --interval 120
-zkteco-bridge autostart install
-zkteco-bridge autostart uninstall
-zkteco-bridge config validate
-zkteco-bridge doctor
+fingerbridge setup
+fingerbridge once
+fingerbridge serve --interval 120
+fingerbridge autostart install
+fingerbridge autostart uninstall
+fingerbridge config validate
+fingerbridge doctor
 ```
 
 Keep compatibility aliases for the old flags if existing client scripts depend on them.
@@ -293,11 +293,11 @@ Python uses PyInstaller and cannot cross-compile from one OS to every target.
 Rust release artifacts should be:
 
 ```text
-zkteco-bridge-linux-x86_64
-zkteco-bridge-linux-aarch64
-zkteco-bridge-macos-aarch64
-zkteco-bridge-macos-x86_64
-zkteco-bridge-windows-x86_64.exe
+fingerbridge-linux-x86_64
+fingerbridge-linux-aarch64
+fingerbridge-macos-aarch64
+fingerbridge-macos-x86_64
+fingerbridge-windows-x86_64.exe
 ```
 
 Keep install scripts initially:

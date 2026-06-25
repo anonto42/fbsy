@@ -44,7 +44,7 @@ pub fn run(interval: Option<u64>, config: Option<PathBuf>) -> Result<()> {
 
     let address = format!("127.0.0.1:{}", cfg.bridge_port);
     let listener = TcpListener::bind(&address)?;
-    println!("ZKTeco Bridge Rust serving on http://{address}");
+    println!("FingerBridge serving on http://{address}");
     println!("  GET  /health");
     println!("  POST /sync");
     println!("  POST /sync?device=CODE");
@@ -207,7 +207,7 @@ struct DeviceHealth {
 fn health_body(states: &Arc<Vec<Arc<DeviceSyncState>>>, webhook_url: &str) -> HealthBody {
     HealthBody {
         status: "ok",
-        agent: "zkteco-bridge",
+        agent: "fingerbridge",
         version: env!("CARGO_PKG_VERSION"),
         runtime: "rust",
         vps_webhook_url: webhook_url.to_string(),

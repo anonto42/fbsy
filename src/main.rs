@@ -10,10 +10,10 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     // `clap` converts terminal arguments into the typed `Cli` struct.
-    let cli = zkteco_bridge::cli::Cli::parse();
+    let cli = fingerbridge::cli::Cli::parse();
 
     // The CLI layer dispatches to application use cases.
-    if let Err(err) = zkteco_bridge::cli::run(cli) {
+    if let Err(err) = fingerbridge::cli::run(cli) {
         eprintln!(
             "{} {}",
             console::style("Error:").red().bold(),

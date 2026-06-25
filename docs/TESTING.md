@@ -5,7 +5,7 @@ adapters before we connect to a real ZKTeco device or a real HRMS server.
 
 [BRIDGE_BUILD_SPEC.md](BRIDGE_BUILD_SPEC.md) is the source of truth for HRMS
 request/response contracts. The Python bridge tests in
-`~/developer_workspace/projects/levelaxis/zkteco_bridge/tests` are the parity
+`~/developer_workspace/projects/levelaxis/fingerbridge/tests` are the parity
 reference for behavior that already exists.
 
 ## Test Pyramid
@@ -158,11 +158,11 @@ Use `assert_cmd` later for CLI behavior.
 
 Test:
 
-- `zkteco-bridge help`
-- `zkteco-bridge doctor`
-- `zkteco-bridge config validate`
-- `zkteco-bridge config show`
-- `zkteco-bridge once`
+- `fingerbridge help`
+- `fingerbridge doctor`
+- `fingerbridge config validate`
+- `fingerbridge config show`
+- `fingerbridge once`
 - compatibility aliases like `--once` and `--setup`
 - `--interval` clamps to at least `5`
 - success and failure exit codes
@@ -179,8 +179,8 @@ These tests need a real ZKTeco device on the same LAN.
 
 Checklist:
 
-1. `zkteco-bridge devices test CODE` connects.
-2. `zkteco-bridge once --device CODE` pulls attendance.
+1. `fingerbridge devices test CODE` connects.
+2. `fingerbridge once --device CODE` pulls attendance.
 3. HRMS receives events.
 4. Failed HRMS upload does not clear attendance.
 5. Successful HRMS upload clears attendance only when enabled.
@@ -224,7 +224,7 @@ On a clean machine:
 3. Confirm global command works:
 
 ```bash
-zkteco-bridge help
+fingerbridge help
 ```
 
 4. Run setup.

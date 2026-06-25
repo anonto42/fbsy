@@ -44,18 +44,18 @@ Not built yet:
 ## Python Parity Reference
 
 The Rust bridge is replacing the Python bridge in
-`~/developer_workspace/projects/levelaxis/zkteco_bridge`.
+`~/developer_workspace/projects/levelaxis/fingerbridge`.
 
 Use these Python files as behavior references while porting:
 
-- `src/zkteco_bridge/config.py`
-- `src/zkteco_bridge/cli.py`
-- `src/zkteco_bridge/core/sync.py`
-- `src/zkteco_bridge/core/hrms.py`
-- `src/zkteco_bridge/core/job_poller.py`
-- `src/zkteco_bridge/core/templates.py`
-- `src/zkteco_bridge/api/server.py`
-- `src/zkteco_bridge/models/events.py`
+- `src/fingerbridge/config.py`
+- `src/fingerbridge/cli.py`
+- `src/fingerbridge/core/sync.py`
+- `src/fingerbridge/core/hrms.py`
+- `src/fingerbridge/core/job_poller.py`
+- `src/fingerbridge/core/templates.py`
+- `src/fingerbridge/api/server.py`
+- `src/fingerbridge/models/events.py`
 
 Use these Python tests as parity references:
 
@@ -364,9 +364,9 @@ Build:
 Exit condition:
 
 ```bash
-zkteco-bridge help
-zkteco-bridge service status
-zkteco-bridge doctor
+fingerbridge help
+fingerbridge service status
+fingerbridge doctor
 ```
 
 ## Phase 11: Real ZKTeco Adapter

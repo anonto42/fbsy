@@ -1,8 +1,8 @@
 [package]
-name = "zkteco-bridge"
+name = "fingerbridge"
 version = "0.1.0"
 edition = "2021"
-description = "Native Rust ZKTeco attendance bridge for HRMS webhook ingestion"
+description = "Native biometric attendance bridge for HRMS webhook ingestion"
 license = "Proprietary"
 publish = false
 

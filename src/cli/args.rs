@@ -7,12 +7,12 @@ use clap::Parser;
 use super::command::Command;
 
 #[derive(Debug, Parser)]
-#[command(name = "zkteco-bridge")]
-#[command(about = "Native Rust ZKTeco attendance bridge for HRMS webhook ingestion")]
+#[command(name = "fingerbridge")]
+#[command(about = "Native biometric attendance bridge for HRMS webhook ingestion")]
 #[command(version)]
 /// Top-level CLI shape parsed from terminal arguments.
 pub struct Cli {
-    /// Modern subcommand style, such as `zkteco-bridge config validate`.
+    /// Modern subcommand style, such as `fingerbridge config validate`.
     #[command(subcommand)]
     pub command: Option<Command>,
 

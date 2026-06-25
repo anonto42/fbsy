@@ -132,7 +132,7 @@ fn build_report(config_path: &Path, deep: bool) -> DoctorReport {
     let config_exists = config_path.exists();
 
     let mut report = DoctorReport {
-        agent: "zkteco-bridge".to_string(),
+        agent: "fingerbridge".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         runtime: "rust".to_string(),
         executable_path,
@@ -249,20 +249,20 @@ fn port_available(port: u16) -> bool {
 
 fn next_steps(report: &DoctorReport) -> Vec<String> {
     if !report.config_exists {
-        return vec!["zkteco-bridge setup".to_string()];
+        return vec!["fingerbridge setup".to_string()];
     }
     if !report.config_valid {
-        return vec!["fix config.json and run zkteco-bridge config validate".to_string()];
+        return vec!["fix config.json and run fingerbridge config validate".to_string()];
     }
     vec![
-        "zkteco-bridge doctor --deep".to_string(),
-        "zkteco-bridge once --device <DEVICE_CODE>".to_string(),
-        "zkteco-bridge serve".to_string(),
+        "fingerbridge doctor --deep".to_string(),
+        "fingerbridge once --device <DEVICE_CODE>".to_string(),
+        "fingerbridge serve".to_string(),
     ]
 }
 
 fn print_report(report: &DoctorReport) {
-    println!("{}", style("ZKTeco Bridge Rust Diagnostics").cyan().bold());
+    println!("{}", style("FingerBridge Diagnostics").cyan().bold());
     println!();
     println!("Agent:      {}", report.agent);
     println!("Version:    {}", report.version);

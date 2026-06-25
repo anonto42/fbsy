@@ -1,6 +1,6 @@
 # Codebase Architecture Decision
 
-This document decides the best codebase architecture for `zkteco_bridge_in_rust`.
+This document decides the best codebase architecture for `fingerbridge_in_rust`.
 
 The goal is twofold:
 
@@ -18,7 +18,7 @@ Do not split into many crates yet. Split into a Cargo workspace only when module
 The project is a local bridge agent, not a large distributed backend. It has clear components, but the first production goal is still one binary:
 
 ```text
-zkteco-bridge executable
+fingerbridge executable
         |
         v
 config -> sync engine -> device adapter
@@ -162,7 +162,7 @@ High-level design:
 
 ```text
 Office LAN machine
-  └── zkteco-bridge process
+  └── fingerbridge process
         ├── CLI setup/control commands
         ├── local HTTP API on 127.0.0.1
         ├── scheduler
@@ -238,11 +238,11 @@ When that happens, split to:
 
 ```text
 crates/
-├── zkteco-bridge-core/
-├── zkteco-bridge-device/
-├── zkteco-bridge-hrms/
-├── zkteco-bridge-api/
-└── zkteco-bridge-cli/
+├── fingerbridge-core/
+├── fingerbridge-device/
+├── fingerbridge-hrms/
+├── fingerbridge-api/
+└── fingerbridge-cli/
 ```
 
 Until then, modules are enough.

@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use serde_json::json;
-use zkteco_bridge::config::{BridgeConfig, ConfigError};
+use fingerbridge::config::{BridgeConfig, ConfigError};
 
 #[test]
 fn config_example_exists() {

@@ -1,6 +1,6 @@
-# ZKTeco Bridge In Rust
+# FingerBridge
 
-Native Rust rewrite of the LevelAxis ZKTeco Bridge Agent.
+Native biometric attendance bridge for HRMS webhook ingestion.
 
 The bridge runs on a client machine inside the office LAN, connects to a ZKTeco attendance device, pulls attendance records, converts them into HRMS events, and forwards those events to the HRMS webhook API.
 
@@ -9,7 +9,7 @@ ZKTeco Device
       |
       | TCP 4370
       v
-Rust Bridge Agent
+FingerBridge
       |
       | HTTPS JSON webhook
       v
@@ -54,11 +54,11 @@ cargo run -- serve --interval 120
 Compatibility aliases planned from the Python version:
 
 ```bash
-zkteco-bridge --setup
-zkteco-bridge --once
-zkteco-bridge --interval 120
-zkteco-bridge --install-autostart
-zkteco-bridge --uninstall-autostart
+fingerbridge --setup
+fingerbridge --once
+fingerbridge --interval 120
+fingerbridge --install-autostart
+fingerbridge --uninstall-autostart
 ```
 
 ## First Local Setup
