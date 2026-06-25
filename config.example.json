@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy this file to config.json and fill in your values.",
+  "vpsWebhookUrl": "https://api.yourdomain.com/api/v1/biometric-devices/webhook",
+  "bridgePort": 7431,
+  "jobPollIntervalSeconds": 30,
+  "devices": [
+    {
+      "deviceIp": "192.168.x.x",
+      "devicePort": 4370,
+      "devicePassword": 0,
+      "deviceTimeout": 15,
+      "deviceForceUdp": false,
+      "deviceOmitPing": true,
+      "deviceCode": "YOUR-DEVICE-CODE",
+      "organizationId": 1,
+      "apiKey": "your-webhook-api-key-here",
+      "clearAttendanceAfterSync": false,
+      "syncIntervalSeconds": 300
+    }
+  ]
+}
