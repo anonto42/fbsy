@@ -221,6 +221,12 @@ pub fn run_hrms(port: u16) -> Result<()> {
         style("✔").green().bold(),
         style(format!("http://0.0.0.0:{port}")).cyan().bold()
     );
+    println!("  POST  /webhook                         ← receives attendance events");
+    println!("  GET   /api/v1/biometric-devices/pending-jobs ← returns [] (job poller)");
+    println!("  POST  /api/v1/biometric-devices/jobs/*/complete ← job completion");
+    println!("  GET   /events                          ← inspect received events");
+    println!("  GET   /reset                           ← clear received events");
+    println!("  GET   /health                          ← server health check");
 
     let received_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
 
@@ -268,23 +274,55 @@ fn handle_hrms_client(
         let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
         stream.write_all(response.as_bytes())?;
     } else if method == "GET" && clean_path == "/events" {
+        // Debug: return all received attendance events
         let list = received_events.lock().unwrap();
         let body = serde_json::to_string_pretty(&*list)?;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(response.as_bytes())?;
+        http_json(&mut stream, 200, &body)?;
     } else if method == "GET" && clean_path == "/reset" {
-        if let Ok(mut list) = received_events.lock() {
-            list.clear();
-        }
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
-        stream.write_all(response.as_bytes())?;
+        // Debug: clear received events
+        received_events.lock().unwrap().clear();
+        http_json(&mut stream, 200, r#"{"ok":true}"#)?;
+    } else if method == "GET" && clean_path == "/health" {
+        http_json(&mut stream, 200, r#"{"ok":true,"agent":"mock-hrms"}"#)?;
+    } else if method == "GET"
+        && (clean_path.ends_with("/pending-jobs")
+            || clean_path.contains("/biometric-devices/pending-jobs"))
+    {
+        // Job poller endpoint — return empty list so the poller runs without errors
+        let body = r#"{"statusCode":200,"message":"Success","data":[]}"#;
+        http_json(&mut stream, 200, body)?;
+    } else if method == "POST"
+        && (clean_path.contains("/jobs/") && clean_path.ends_with("/complete"))
+    {
+        // Job completion endpoint
+        let job_id = clean_path
+            .split("/jobs/")
+            .nth(1)
+            .and_then(|s| s.split('/').next())
+            .unwrap_or("unknown");
+        println!(
+            "{} Job completed: {}",
+            style("✔").green().bold(),
+            style(job_id).yellow()
+        );
+        let body = r#"{"statusCode":200,"message":"Success","data":{}}"#;
+        http_json(&mut stream, 200, body)?;
     } else {
-        let response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-        stream.write_all(response.as_bytes())?;
+        http_json(&mut stream, 404, r#"{"ok":false,"message":"not found"}"#)?;
     }
+    Ok(())
+}
+
+fn http_json(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Unknown",
+    };
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes())?;
     Ok(())
 }

@@ -12,7 +12,7 @@ use super::command::Command;
 #[command(version)]
 /// Top-level CLI shape parsed from terminal arguments.
 pub struct Cli {
-    /// Modern subcommand style, such as `fingerbridge config validate`.
+    /// Modern subcommand style, such as `fbsy config validate`.
     #[command(subcommand)]
     pub command: Option<Command>,
 
