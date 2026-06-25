@@ -5,12 +5,13 @@
 
 use std::{
     fs,
-    io::{self, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
+use console::style;
+use dialoguer::{Confirm, Input};
 
 use crate::{
     config::{BridgeConfig, BridgeDeviceConfig},
@@ -24,13 +25,19 @@ pub fn run() -> Result<()> {
 
 /// Run setup for a specific config path. Kept separate for tests.
 pub fn run_at(path: PathBuf) -> Result<()> {
-    println!("ZKTeco Bridge setup");
-    println!("Config path: {}", path.display());
+    println!("{}", style("ZKTeco Bridge Setup Wizard").cyan().bold());
+    println!("Config path: {}", style(path.display()).yellow());
     println!();
 
-    if path.exists() && !ask_bool("Config already exists. Reconfigure?", false)? {
-        println!("Setup cancelled. Existing config was left unchanged.");
-        return Ok(());
+    if path.exists() {
+        let reconfigure = Confirm::new()
+            .with_prompt("Config already exists. Reconfigure?")
+            .default(false)
+            .interact()?;
+        if !reconfigure {
+            println!("{}", style("Setup cancelled. Existing config was left unchanged.").yellow());
+            return Ok(());
+        }
     }
 
     let cfg = collect_config()?;
@@ -39,29 +46,73 @@ pub fn run_at(path: PathBuf) -> Result<()> {
     save_config_atomically(&path, &cfg)?;
 
     println!();
-    println!("Setup complete.");
-    println!("Next:");
-    println!("  zkteco-bridge config validate");
-    println!("  zkteco-bridge doctor");
-    println!("  zkteco-bridge once --device <DEVICE_CODE>");
+    println!("{}", style("Setup completed successfully!").green().bold());
+    println!("{}", style("Next steps:").underlined().bold());
+    println!("  1. Validate config: {}", style("./zkteco-bridge config validate").cyan());
+    println!("  2. Run diagnostics: {}", style("./zkteco-bridge doctor").cyan());
+    println!("  3. Run once:        {}", style("./zkteco-bridge once --device <DEVICE_CODE>").cyan());
+    println!("  4. Start service:   {}", style("./zkteco-bridge serve").cyan());
     Ok(())
 }
 
 fn collect_config() -> Result<BridgeConfig> {
-    let vps_webhook_url = ask_string("HRMS webhook URL", None)?;
-    let bridge_port = ask_u16("Bridge HTTP port", 7431)?;
+    let vps_webhook_url: String = Input::new()
+        .with_prompt("HRMS Webhook URL")
+        .validate_with(|input: &String| {
+            if input.trim().starts_with("http://") || input.trim().starts_with("https://") {
+                Ok(())
+            } else {
+                Err("Webhook URL must start with http:// or https://")
+            }
+        })
+        .interact_text()?;
 
-    let enable_jobs = ask_bool("Enable HRMS job polling?", false)?;
+    let bridge_port: u16 = Input::new()
+        .with_prompt("Bridge HTTP port")
+        .default(7431)
+        .interact_text()?;
+
+    let enable_jobs = Confirm::new()
+        .with_prompt("Enable HRMS job polling?")
+        .default(false)
+        .interact()?;
+
     let (hrms_base_url, hrms_api_token, job_poll_interval_seconds) = if enable_jobs {
-        let base = ask_string("HRMS base URL", None)?;
-        let token = ask_string("HRMS API token (blank = use first device apiKey)", Some(""))?;
+        let base: String = Input::new()
+            .with_prompt("HRMS Base URL")
+            .validate_with(|input: &String| {
+                if input.trim().starts_with("http://") || input.trim().starts_with("https://") {
+                    Ok(())
+                } else {
+                    Err("HRMS Base URL must start with http:// or https://")
+                }
+            })
+            .interact_text()?;
+
+        let token: String = Input::new()
+            .with_prompt("HRMS API token (blank = use first device apiKey)")
+            .default("".to_string())
+            .show_default(false)
+            .interact_text()?;
         let token = if token.trim().is_empty() {
             None
         } else {
-            Some(token)
+            Some(token.trim().to_string())
         };
-        let interval = ask_u64("Job poll interval seconds", 30)?;
-        (Some(base), token, interval.max(5))
+
+        let interval: u64 = Input::new()
+            .with_prompt("Job poll interval seconds")
+            .default(30)
+            .validate_with(|input: &u64| {
+                if *input >= 5 {
+                    Ok(())
+                } else {
+                    Err("Job poll interval must be at least 5 seconds")
+                }
+            })
+            .interact_text()?;
+
+        (Some(base.trim().to_string()), token, interval)
     } else {
         (None, None, 30)
     };
@@ -69,13 +120,17 @@ fn collect_config() -> Result<BridgeConfig> {
     let mut devices = Vec::new();
     loop {
         devices.push(collect_device(devices.len() + 1)?);
-        if !ask_bool("Add another device?", false)? {
+        let add_another = Confirm::new()
+            .with_prompt("Add another device?")
+            .default(false)
+            .interact()?;
+        if !add_another {
             break;
         }
     }
 
     Ok(BridgeConfig {
-        vps_webhook_url,
+        vps_webhook_url: vps_webhook_url.trim().to_string(),
         bridge_port,
         hrms_base_url,
         hrms_api_token,
@@ -86,88 +141,108 @@ fn collect_config() -> Result<BridgeConfig> {
 
 fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
     println!();
-    println!("Device {number}");
+    println!("{}", style(format!("--- Device {number} ---")).bold().cyan());
+
+    let device_ip: String = Input::new()
+        .with_prompt("Device IP")
+        .validate_with(|input: &String| {
+            if input.trim().is_empty() {
+                Err("Device IP is required")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+
+    let device_port: u16 = Input::new()
+        .with_prompt("Device port")
+        .default(4370)
+        .interact_text()?;
+
+    let device_password: i32 = Input::new()
+        .with_prompt("Device connection password")
+        .default(0)
+        .interact_text()?;
+
+    let device_timeout: u64 = Input::new()
+        .with_prompt("Device connection timeout seconds")
+        .default(15)
+        .validate_with(|input: &u64| {
+            if (1..=120).contains(input) {
+                Ok(())
+            } else {
+                Err("Timeout must be between 1 and 120 seconds")
+            }
+        })
+        .interact_text()?;
+
+    let device_force_udp = Confirm::new()
+        .with_prompt("Force UDP connection?")
+        .default(false)
+        .interact()?;
+
+    let device_omit_ping = Confirm::new()
+        .with_prompt("Omit ICMP ping check?")
+        .default(true)
+        .interact()?;
+
+    let device_code: String = Input::new()
+        .with_prompt("Device unique code")
+        .validate_with(|input: &String| {
+            if input.trim().is_empty() {
+                Err("Device code is required")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+
+    let api_key: String = Input::new()
+        .with_prompt("Device HRMS API key")
+        .validate_with(|input: &String| {
+            if input.trim().is_empty() {
+                Err("API key is required")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+
+    let organization_id: u64 = Input::new()
+        .with_prompt("Organization ID")
+        .default(1)
+        .interact_text()?;
+
+    let sync_interval_seconds: u64 = Input::new()
+        .with_prompt("Sync interval seconds")
+        .default(300)
+        .validate_with(|input: &u64| {
+            if *input >= 5 {
+                Ok(())
+            } else {
+                Err("Sync interval must be at least 5 seconds")
+            }
+        })
+        .interact_text()?;
+
+    let clear_attendance_after_sync = Confirm::new()
+        .with_prompt("Clear attendance logs on device after successful sync?")
+        .default(false)
+        .interact()?;
+
     Ok(BridgeDeviceConfig {
-        device_ip: ask_string("Device IP", None)?,
-        device_port: ask_u16("Device port", 4370)?,
-        device_password: ask_i32("Device password", 0)?,
-        device_timeout: ask_u64("Device timeout seconds", 15)?,
-        device_force_udp: ask_bool("Force UDP?", false)?,
-        device_omit_ping: ask_bool("Omit ping?", true)?,
-        device_code: ask_string("Device code", None)?,
-        api_key: ask_string("Device API key", None)?,
-        organization_id: ask_u64("Organization ID", 1)?,
-        sync_interval_seconds: ask_u64("Sync interval seconds", 300)?.max(5),
-        clear_attendance_after_sync: ask_bool("Clear attendance after successful sync?", false)?,
+        device_ip: device_ip.trim().to_string(),
+        device_port,
+        device_password,
+        device_timeout,
+        device_force_udp,
+        device_omit_ping,
+        device_code: device_code.trim().to_string(),
+        api_key: api_key.trim().to_string(),
+        organization_id,
+        sync_interval_seconds,
+        clear_attendance_after_sync,
     })
-}
-
-fn ask_string(label: &str, default: Option<&str>) -> Result<String> {
-    loop {
-        let answer = prompt(label, default)?;
-        if !answer.trim().is_empty() || default.is_some() {
-            return Ok(answer.trim().to_string());
-        }
-        println!("{label} is required.");
-    }
-}
-
-fn ask_u16(label: &str, default: u16) -> Result<u16> {
-    loop {
-        let answer = prompt(label, Some(&default.to_string()))?;
-        match answer.trim().parse::<u16>() {
-            Ok(value) if value >= 1 => return Ok(value),
-            _ => println!("{label} must be a number from 1 to 65535."),
-        }
-    }
-}
-
-fn ask_u64(label: &str, default: u64) -> Result<u64> {
-    loop {
-        let answer = prompt(label, Some(&default.to_string()))?;
-        match answer.trim().parse::<u64>() {
-            Ok(value) => return Ok(value),
-            _ => println!("{label} must be a positive number."),
-        }
-    }
-}
-
-fn ask_i32(label: &str, default: i32) -> Result<i32> {
-    loop {
-        let answer = prompt(label, Some(&default.to_string()))?;
-        match answer.trim().parse::<i32>() {
-            Ok(value) => return Ok(value),
-            _ => println!("{label} must be a number."),
-        }
-    }
-}
-
-fn ask_bool(label: &str, default: bool) -> Result<bool> {
-    let default_text = if default { "y" } else { "n" };
-    loop {
-        let answer = prompt(&format!("{label} [y/n]"), Some(default_text))?;
-        match answer.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" | "true" | "1" => return Ok(true),
-            "n" | "no" | "false" | "0" => return Ok(false),
-            _ => println!("Please answer y or n."),
-        }
-    }
-}
-
-fn prompt(label: &str, default: Option<&str>) -> Result<String> {
-    match default {
-        Some(default) => print!("{label} [{default}]: "),
-        None => print!("{label}: "),
-    }
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let trimmed = input.trim_end();
-    if trimmed.is_empty() {
-        Ok(default.unwrap_or_default().to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
 }
 
 fn backup_existing_config(path: &Path) -> Result<Option<PathBuf>> {

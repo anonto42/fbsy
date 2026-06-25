@@ -3,9 +3,12 @@
 use std::{
     net::TcpListener,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{bail, Result};
+use console::style;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use crate::{
@@ -40,13 +43,42 @@ pub fn logs_path() -> Result<()> {
 pub fn device_test(config: Option<PathBuf>, code: &str) -> Result<()> {
     let cfg = load_config(config.unwrap_or_else(default_config_path))?;
     let device = find_device(&cfg, code)?;
-    match ZktecoTcpConnector.connect(device) {
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("{spinner:.green} {msg}")?,
+    );
+    pb.set_message(format!(
+        "Connecting to device {} ({}:{})...",
+        style(code).cyan().bold(),
+        device.device_ip,
+        device.device_port
+    ));
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let res = ZktecoTcpConnector.connect(device);
+    pb.finish_and_clear();
+
+    match res {
         Ok(mut client) => {
             client.disconnect();
-            println!("Device connection OK: {code}");
+            println!(
+                "{} Device connection OK: {}",
+                style("✔").green().bold(),
+                style(code).cyan().bold()
+            );
             Ok(())
         }
-        Err(err) => bail!("Device connection failed for {code}: {err}"),
+        Err(err) => {
+            bail!(
+                "{} Device connection failed for {}: {}",
+                style("✘").red().bold(),
+                style(code).cyan().bold(),
+                style(err).red()
+            )
+        }
     }
 }
 
@@ -55,9 +87,41 @@ pub fn webhook_test(config: Option<PathBuf>, code: &str) -> Result<()> {
     let cfg = load_config(config.unwrap_or_else(default_config_path))?;
     let device = find_device(&cfg, code)?;
     let client = ReqwestHrmsClient::default();
-    client.forward_events(&cfg.vps_webhook_url, device, &[])?;
-    println!("Webhook test OK: {code}");
-    Ok(())
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("{spinner:.green} {msg}")?,
+    );
+    pb.set_message(format!(
+        "Sending webhook test request for {} to {}...",
+        style(code).cyan().bold(),
+        cfg.vps_webhook_url
+    ));
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let res = client.forward_events(&cfg.vps_webhook_url, device, &[]);
+    pb.finish_and_clear();
+
+    match res {
+        Ok(_) => {
+            println!(
+                "{} Webhook test OK: {}",
+                style("✔").green().bold(),
+                style(code).cyan().bold()
+            );
+            Ok(())
+        }
+        Err(err) => {
+            bail!(
+                "{} Webhook test failed for {}: {}",
+                style("✘").red().bold(),
+                style(code).cyan().bold(),
+                style(err).red()
+            )
+        }
+    }
 }
 
 fn build_report(config_path: &Path, deep: bool) -> DoctorReport {
@@ -123,6 +187,17 @@ fn build_device_report(
     };
 
     if deep {
+        let code = &device.device_code;
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .template("{spinner:.green} {msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        pb.set_message(format!("Checking connection to device {code}..."));
+        pb.enable_steady_tick(Duration::from_millis(100));
+
         report.device_connection = Some(match ZktecoTcpConnector.connect(device) {
             Ok(mut client) => {
                 client.disconnect();
@@ -131,6 +206,8 @@ fn build_device_report(
             Err(err) => CheckResult::fail(err.to_string()),
         });
 
+        pb.set_message(format!("Checking HRMS webhook connection for {code}..."));
+
         let client = ReqwestHrmsClient::default();
         report.webhook = Some(
             match client.forward_events(&cfg.vps_webhook_url, device, &[]) {
@@ -138,6 +215,8 @@ fn build_device_report(
                 Err(err) => CheckResult::fail(err.to_string()),
             },
         );
+
+        pb.finish_and_clear();
     }
 
     report
@@ -183,67 +262,71 @@ fn next_steps(report: &DoctorReport) -> Vec<String> {
 }
 
 fn print_report(report: &DoctorReport) {
-    println!("ZKTeco Bridge Rust");
+    println!("{}", style("ZKTeco Bridge Rust Diagnostics").cyan().bold());
     println!();
     println!("Agent:      {}", report.agent);
     println!("Version:    {}", report.version);
     println!("Runtime:    {}", report.runtime);
     println!("Executable: {}", report.executable_path);
-    println!("Config:     {}", status(report.config_exists));
+    println!("Config:     {}", status_styled(report.config_exists));
     println!("Config path: {}", report.config_path);
-    println!("Config valid: {}", status(report.config_valid));
+    println!("Config valid: {}", status_styled(report.config_valid));
     if let Some(error) = &report.config_error {
-        println!("Config error: {error}");
+        println!("Config error: {}", style(error).red().bold());
     }
     println!("Logs:       {}", report.log_dir);
-    println!("Log dir:    {}", status(report.log_dir_exists));
+    println!("Log dir:    {}", status_styled(report.log_dir_exists));
     if let Some(available) = report.bridge_port_available {
         println!(
             "HTTP port:  {}",
-            if available { "available" } else { "busy" }
+            if available {
+                style("available").green().bold()
+            } else {
+                style("busy").red().bold()
+            }
         );
     }
     println!("Devices:    {}", report.device_count);
-    println!("Job polling: {}", enabled(report.job_polling_enabled));
-    println!("Service:    {}", report.service_status);
+    println!("Job polling: {}", enabled_styled(report.job_polling_enabled));
+    println!("Service:    {}", style(&report.service_status).yellow());
 
     for device in &report.devices {
         println!();
-        println!("Device {}", device.device_code);
+        println!("Device {}", style(&device.device_code).cyan().bold());
         println!("  IP:       {}:{}", device.device_ip, device.device_port);
         println!("  Interval: {}s", device.sync_interval_seconds);
         println!(
             "  Clear after sync: {}",
-            enabled(device.clear_attendance_after_sync)
+            enabled_styled(device.clear_attendance_after_sync)
         );
         if let Some(check) = &device.device_connection {
-            println!("  Device connection: {}", check.display());
+            println!("  Device connection: {}", check.display_styled());
         }
         if let Some(check) = &device.webhook {
-            println!("  Webhook: {}", check.display());
+            println!("  Webhook:           {}", check.display_styled());
         }
     }
 
     println!();
-    println!("Next:");
+    println!("{}", style("Next:").underlined().bold());
     for step in &report.next_steps {
-        println!("  {step}");
+        println!("  {}", style(step).yellow());
     }
 }
 
-fn status(value: bool) -> &'static str {
+fn status_styled(value: bool) -> String {
     if value {
-        "ok"
+        style("ok").green().bold().to_string()
     } else {
-        "missing"
+        style("missing").red().bold().to_string()
     }
 }
 
-fn enabled(value: bool) -> &'static str {
+fn enabled_styled(value: bool) -> String {
     if value {
-        "enabled"
+        style("enabled").green().to_string()
     } else {
-        "disabled"
+        style("disabled").yellow().to_string()
     }
 }
 
@@ -299,11 +382,15 @@ impl CheckResult {
         Self { ok: false, message }
     }
 
-    fn display(&self) -> String {
+    fn display_styled(&self) -> String {
         if self.ok {
-            "ok".to_string()
+            style("ok").green().bold().to_string()
         } else {
-            format!("failed: {}", self.message)
+            format!(
+                "{} {}",
+                style("failed:").red().bold(),
+                style(&self.message).red()
+            )
         }
     }
 }

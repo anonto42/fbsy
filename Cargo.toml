@@ -10,7 +10,7 @@ publish = false
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "std"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "color", "error-context"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -18,11 +18,12 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+console = "0.15"
+dialoguer = "0.11"
+indicatif = "0.17"
+
 # Add after the skeleton is stable:
 # axum = "0.7"
-# console = "0.15"
-# dialoguer = "0.11"
 # directories = "6"
-# indicatif = "0.17"
 # tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 # tower-http = "0.6"

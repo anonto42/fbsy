@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use console::style;
 
 use crate::{
     adapters::config_file::JsonConfigStore, ports::config_store::ConfigStore,
@@ -18,7 +19,7 @@ pub fn validate(path: Option<PathBuf>) -> Result<()> {
     let store = JsonConfigStore;
     // Loading through the store also validates the config.
     let _cfg = store.load(&path)?;
-    println!("Config is valid: {}", path.display());
+    println!("{} Config is valid: {}", style("✔").green().bold(), style(path.display()).yellow());
     Ok(())
 }
 
