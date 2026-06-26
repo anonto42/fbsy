@@ -23,6 +23,11 @@ pub fn run(cli: Cli) -> Result<()> {
     match command {
         Command::Install => application::install::install(),
         Command::Uninstall => application::install::uninstall(),
+        Command::Update(args) => application::update::run(application::update::UpdateOpts {
+            check_only: args.check,
+            assume_yes: args.yes,
+            auto: args.auto,
+        }),
 
         Command::Run(args) => dispatch_run(args.service),
         Command::Dashboard => application::dashboard::run(),

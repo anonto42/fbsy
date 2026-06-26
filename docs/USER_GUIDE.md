@@ -299,6 +299,39 @@ results — so the server can push to devices without any inbound connection to 
 
 `config show` redacts `deviceCode` and `apiKey` as `***`.
 
+**Self-update fields (top-level):**
+| Field | Meaning | Default |
+|---|---|---|
+| `autoUpdate` | running bridge auto-installs newer releases | false |
+| `updateCheckIntervalHours` | how often it checks GitHub | 6 |
+
+---
+
+## 6b. Updating fbsy
+
+```bash
+fbsy update --check     # is a newer release available?
+fbsy update             # install it (restarts running services)
+```
+
+The update is a **safe, reversible swap**, with a diagnosis line per step:
+1. Check the latest release (via the GitHub `latest/download` redirect — no API/token).
+2. Download the matching asset; verify its SHA-256 against `checksums.txt`.
+3. Smoke-test the new binary (`--version` must report the expected version).
+4. Back up the current binary to `~/.config/fbsy/update/fbsy-backup`.
+5. Replace the running binary atomically.
+6. Restart the services that were running (terminate old by pid → respawn from new binary).
+7. Health-check (each service alive; `bridge` answers `/health`).
+8. **Auto-rollback** to the backup if any of 6–7 fail.
+
+**Auto-update (opt-in):** with `autoUpdate: true`, the running bridge checks every
+`updateCheckIntervalHours` and, when a newer release exists, launches a detached
+`fbsy update --auto` that performs the same safe swap — including restarting the bridge itself.
+
+**Uptime / data safety:** the swap restarts the bridge, so expect a few seconds of downtime —
+not literal 100% uptime. **No data is lost:** attendance is buffered on the device and never
+cleared until a successful HRMS upload, and config/logs/registry are untouched by an update.
+
 ---
 
 ## 7. Troubleshooting & known behaviors

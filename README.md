@@ -49,6 +49,31 @@ chmod +x fbsy-linux-x86_64        # Linux/macOS only
 
 ---
 
+## Updating
+
+```bash
+fbsy update --check     # report whether a newer release exists
+fbsy update             # download + install it, restarting running services
+```
+
+`fbsy update` does a **safe, reversible swap**: check GitHub → download → verify SHA-256 →
+smoke-test the new binary → back up the current one → replace → restart the services that
+were running → health-check → **auto-rollback if anything fails**.
+
+**Hands-off auto-update (opt-in):** set `autoUpdate: true` in `config.json` and the running
+bridge checks every `updateCheckIntervalHours` (default 6) and applies new releases itself.
+
+```jsonc
+{ "autoUpdate": true, "updateCheckIntervalHours": 6 }
+```
+
+> **On "100% uptime":** a binary swap requires restarting the bridge, so there are a few
+> seconds of downtime — literal 100% uptime isn't possible. But **no data is lost**:
+> attendance stays buffered on the device and is never cleared until a successful HRMS upload,
+> and your config/logs/registry live in the data dir untouched by an update.
+
+---
+
 ## Quick start
 
 ```bash

@@ -107,6 +107,18 @@ pub fn run_at_bridge(config: Option<PathBuf>, interval: Option<u64>, no_poll: bo
 /// record the registry entry, and return the new pid. Shared by the CLI `run`
 /// commands and the TUI dashboard.
 pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> Result<u32> {
+    let exe = std::env::current_exe().unwrap_or_default();
+    spawn_service_with_exe(&exe, kind, port, args)
+}
+
+/// Like [`spawn_service`] but launches a specific executable. The self-update
+/// flow uses this to restart services from the freshly-installed binary.
+pub fn spawn_service_with_exe(
+    exe: &std::path::Path,
+    kind: ServiceKind,
+    port: Option<u16>,
+    args: &[String],
+) -> Result<u32> {
     paths::ensure_dirs()?;
 
     if let Some(entry) = registry::read(kind.name())? {
@@ -118,7 +130,7 @@ pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> R
     }
 
     let log = paths::service_log_path(kind.name());
-    let pid = process::spawn_detached(kind.name(), args, &log)?;
+    let pid = process::spawn_detached_with_exe(exe, kind.name(), args, &log)?;
     registry::write(&RegistryEntry {
         service: kind.name().to_string(),
         pid,
@@ -126,9 +138,7 @@ pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> R
         url: service_url(kind, port),
         args: args.to_vec(),
         started_at: Utc::now().to_rfc3339(),
-        exe: std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
+        exe: exe.display().to_string(),
     })?;
     Ok(pid)
 }

@@ -73,7 +73,7 @@ pub fn uninstall() -> Result<()> {
 }
 
 /// Where the installed binary should live.
-fn install_bin_path() -> Result<PathBuf> {
+pub fn install_bin_path() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let base = std::env::var_os("LOCALAPPDATA")

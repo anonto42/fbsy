@@ -1,6 +1,6 @@
 [package]
 name = "fingerbridge"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Native biometric attendance bridge for HRMS webhook ingestion"
 license = "Proprietary"
@@ -29,6 +29,8 @@ indicatif = "0.17"
 directories = "6"
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 ratatui = "0.29"
+sha2 = "0.10"
+self-replace = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -147,6 +147,8 @@ fn collect_config() -> Result<BridgeConfig> {
         hrms_base_url,
         hrms_api_token,
         job_poll_interval_seconds,
+        auto_update: false,
+        update_check_interval_hours: 6,
         devices,
     })
 }

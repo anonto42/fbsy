@@ -16,6 +16,8 @@ pub enum Command {
     Install,
     /// Remove the installed binary (data directories are left intact).
     Uninstall,
+    /// Check for and install a newer release (restarts running services).
+    Update(UpdateArgs),
 
     /// Start a service as a detached background process.
     Run(RunArgs),
@@ -41,6 +43,21 @@ pub enum Command {
     /// Internal entry point for detached service processes.
     #[command(name = "__service-run", hide = true)]
     ServiceRun(ServiceRunArgs),
+}
+
+// ── update ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Only report whether a newer release exists; do not install.
+    #[arg(long)]
+    pub check: bool,
+    /// Skip the confirmation prompt.
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+    /// Non-interactive (used by the auto-update trigger).
+    #[arg(long, hide = true)]
+    pub auto: bool,
 }
 
 // ── run / selectors ───────────────────────────────────────────────────────────

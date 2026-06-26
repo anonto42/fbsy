@@ -43,6 +43,9 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
     if !no_poll {
         start_job_poller(&cfg);
     }
+    if cfg.auto_update {
+        start_auto_updater(cfg.update_check_interval_hours);
+    }
 
     let address = format!("127.0.0.1:{}", cfg.bridge_port);
     let listener = TcpListener::bind(&address)?;
@@ -102,6 +105,48 @@ fn start_schedulers(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
             let _ = state.sync_once();
         });
     }
+}
+
+/// Periodically check for a newer release and, when one exists, launch a
+/// detached `fbsy update --auto` process to perform the safe swap + restart.
+/// The updater is a separate process, so it can stop and restart this bridge
+/// without tearing itself down. Stops checking after it triggers once.
+fn start_auto_updater(interval_hours: u64) {
+    let interval = Duration::from_secs(interval_hours.max(1) * 3600);
+    thread::spawn(move || {
+        // A short initial delay so the bridge finishes booting first.
+        thread::sleep(Duration::from_secs(30));
+        loop {
+            match crate::application::update::check() {
+                Ok(status) if status.newer => {
+                    println!(
+                        "auto-update: {} -> {} available; launching updater",
+                        status.current, status.latest
+                    );
+                    if let Err(err) = launch_detached_updater() {
+                        eprintln!("auto-update: could not launch updater: {err}");
+                    }
+                    // The updater will restart this process; stop checking.
+                    return;
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("auto-update: version check failed: {err}"),
+            }
+            thread::sleep(interval);
+        }
+    });
+}
+
+/// Spawn `<installed fbsy> update --auto` fully detached.
+fn launch_detached_updater() -> Result<()> {
+    let exe = crate::application::install::install_bin_path()?;
+    let log = crate::support::paths::service_log_path("update");
+    crate::runtime::process::spawn_detached_command(
+        &exe,
+        &["update".to_string(), "--auto".to_string()],
+        &log,
+    )
+    .map(|_| ())
 }
 
 fn handle_client(

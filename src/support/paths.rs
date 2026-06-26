@@ -47,6 +47,11 @@ pub fn run_dir() -> PathBuf {
     base_dir().join("run")
 }
 
+/// Directory holding self-update working files (download + backup).
+pub fn update_dir() -> PathBuf {
+    base_dir().join("update")
+}
+
 /// Default config path used by CLI commands.
 pub fn default_config_path() -> PathBuf {
     config_dir().join("config.json")

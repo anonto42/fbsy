@@ -12,3 +12,4 @@ pub mod service;
 pub mod setup;
 pub mod sync_once;
 pub mod test_server;
+pub mod update;

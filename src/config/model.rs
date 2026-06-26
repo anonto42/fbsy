@@ -21,6 +21,10 @@ pub struct BridgeConfig {
     pub hrms_api_token: Option<String>,
     /// Job polling interval in seconds.
     pub job_poll_interval_seconds: u64,
+    /// When true, the running bridge auto-installs newer releases.
+    pub auto_update: bool,
+    /// How often (hours) the bridge checks for a newer release.
+    pub update_check_interval_hours: u64,
     /// One or more ZKTeco devices managed by this bridge.
     pub devices: Vec<BridgeDeviceConfig>,
 }

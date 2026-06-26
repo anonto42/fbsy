@@ -34,7 +34,9 @@ pub fn is_alive(pid: u32, expect_exe: Option<&str>) -> bool {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string());
             match running {
-                Some(name) => name == expected_name,
+                // After a self-update the old binary is unlinked, so Linux shows
+                // the exe as "fbsy (deleted)" — strip that so the match still holds.
+                Some(name) => name.trim_end_matches(" (deleted)") == expected_name,
                 // If we can't read the exe (permissions), fall back to "alive".
                 None => true,
             }
@@ -64,7 +66,26 @@ pub fn terminate(pid: u32) -> Result<bool> {
 /// redirecting stdout and stderr to `log_path`. Returns the child pid.
 pub fn spawn_detached(service: &str, internal_args: &[String], log_path: &Path) -> Result<u32> {
     let exe = std::env::current_exe().context("locate current executable")?;
+    spawn_detached_with_exe(&exe, service, internal_args, log_path)
+}
 
+/// Like [`spawn_detached`] but launches a specific executable. The self-update
+/// flow uses this to restart services from the freshly-installed binary.
+pub fn spawn_detached_with_exe(
+    exe: &Path,
+    service: &str,
+    internal_args: &[String],
+    log_path: &Path,
+) -> Result<u32> {
+    let mut args = vec!["__service-run".to_string(), service.to_string()];
+    args.extend(internal_args.iter().cloned());
+    spawn_detached_command(exe, &args, log_path)
+}
+
+/// Spawn an arbitrary `exe args...` fully detached, with stdout/stderr → log.
+/// Used for both service children (`__service-run …`) and the self-updater
+/// (`update --auto`). Returns the child pid.
+pub fn spawn_detached_command(exe: &Path, args: &[String], log_path: &Path) -> Result<u32> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -78,8 +99,7 @@ pub fn spawn_detached(service: &str, internal_args: &[String], log_path: &Path) 
         .context("clone log file handle for stderr")?;
 
     let mut cmd = Command::new(exe);
-    cmd.arg("__service-run").arg(service);
-    cmd.args(internal_args);
+    cmd.args(args);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::from(stdout));
     cmd.stderr(Stdio::from(stderr));
@@ -88,7 +108,7 @@ pub fn spawn_detached(service: &str, internal_args: &[String], log_path: &Path) 
 
     let child = cmd
         .spawn()
-        .with_context(|| format!("spawn detached service '{service}'"))?;
+        .with_context(|| format!("spawn detached process {}", exe.display()))?;
     Ok(child.id())
 }
 

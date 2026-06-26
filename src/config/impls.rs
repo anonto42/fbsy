@@ -48,6 +48,15 @@ impl BridgeConfig {
         )?
         .max(MIN_INTERVAL_SECONDS);
 
+        let auto_update = bool_from_value(root.get("autoUpdate"), false, "autoUpdate", "config")?;
+        let update_check_interval_hours = u64_from_value(
+            root.get("updateCheckIntervalHours"),
+            6,
+            "updateCheckIntervalHours",
+            "config",
+        )?
+        .max(1);
+
         let devices = match root.get("devices") {
             Some(Value::Array(items)) if !items.is_empty() => items
                 .iter()
@@ -73,6 +82,8 @@ impl BridgeConfig {
             hrms_base_url,
             hrms_api_token,
             job_poll_interval_seconds,
+            auto_update,
+            update_check_interval_hours,
             devices,
         };
         cfg.validate()?;
