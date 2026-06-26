@@ -2,11 +2,11 @@
 
 Native biometric attendance bridge, packaged as a small **service manager** — connects ZKTeco devices to HRMS via webhook.
 
-Runs on a Windows, Linux, or macOS machine inside the office LAN. The `fbsy` binary installs itself, then starts/stops/monitors long-running **services** by name. The main service, `at-bridge`, pulls attendance from one or more ZKTeco devices over TCP, maps them to HRMS events, and posts them to your webhook URL.
+Runs on a Windows, Linux, or macOS machine inside the office LAN. The `fbsy` binary installs itself, then starts/stops/monitors long-running **services** by name. The main service, `bridge`, pulls attendance from one or more ZKTeco devices over TCP, maps them to HRMS events, and posts them to your webhook URL.
 
 ```
 GATE-01  ─┐
-GATE-02  ─┼─TCP 4370─▶  fbsy at-bridge (office machine)  ─HTTPS JSON─▶  one HRMS webhook
+GATE-02  ─┼─TCP 4370─▶  fbsy bridge (office machine)  ─HTTPS JSON─▶  one HRMS webhook
 FLOOR-3  ─┘
 ```
 
@@ -53,20 +53,20 @@ chmod +x fbsy-linux-x86_64        # Linux/macOS only
 
 ```bash
 # 1. Start the bridge — first run launches an interactive setup wizard
-fbsy run at-bridge
+fbsy run bridge
 
 # 2. Watch everything in a live dashboard (or `fbsy show` for a static snapshot)
 fbsy dashboard
 
 # 3. Pull attendance once on demand
-fbsy at-bridge sync --once
+fbsy bridge sync --once
 
 # 4. Inspect / stop
-fbsy logs at-bridge
-fbsy close at-bridge
+fbsy logs bridge
+fbsy close bridge
 ```
 
-`fbsy dashboard` is a full-screen live monitor — ↑/↓ select a service, `s` start, `x` stop, `r` restart, `l` toggle the log pane, `q` quit. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
+`fbsy dashboard` is a full-screen live monitor with both single-key shortcuts (↑/↓ select, `s`/`x`/`r` start/stop/restart, `y` sync, `l` logs, `q` quit) **and** a `:command` bar for the full vocabulary. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
 
 ---
 
@@ -76,11 +76,11 @@ fbsy close at-bridge
 
 | Service | What it is |
 |---|---|
-| `at-bridge` | The real bridge — pulls attendance from your devices and forwards to HRMS. This is the one you run in production. |
+| `bridge` | The real bridge — pulls attendance from your devices and forwards to HRMS. This is the one you run in production. |
 | `zkteco` | A mock ZKTeco device server (fake attendance) for local testing without hardware. |
 | `hrms` | A mock HRMS webhook server that prints what it receives, for local testing. |
 
-`fbsy run <service>` starts one; `fbsy show` / `fbsy dashboard` monitor them; `fbsy close <service>` stops one. Each service also has its own command group (e.g. `fbsy at-bridge sync`, `fbsy zkteco run -p 4370`).
+`fbsy run <service>` starts one; `fbsy show` / `fbsy dashboard` monitor them; `fbsy close <service>` stops one. Each service also has its own command group (e.g. `fbsy bridge sync`, `fbsy zkteco run -p 4370`).
 
 **Everything lives in one per-OS data directory** (created by `fbsy install`):
 
@@ -142,7 +142,7 @@ fbsy uninstall               # remove the binary (keeps your data dir)
 
 ### Service management
 ```bash
-fbsy run at-bridge           # start the bridge (wizard on first run)
+fbsy run bridge           # start the bridge (wizard on first run)
 fbsy run zkteco [-p 4370 --records 5]    # start the mock device
 fbsy run hrms   [-p 8800]                # start the mock HRMS
 fbsy show                    # table of all services: status / pid / port / uptime
@@ -151,20 +151,20 @@ fbsy status <service>        # detail for one service
 fbsy logs <service> [-n 50] [--follow]   # tail a service's log
 fbsy close <service>         # stop a service
 ```
-`<service>` is `at-bridge`, `zkteco`, or `hrms`. Running `fbsy` with no command is the same as `fbsy show`.
+`<service>` is `bridge`, `zkteco`, or `hrms`. Running `fbsy` with no command is the same as `fbsy show`.
 
-### `at-bridge` (the real bridge)
+### `bridge` (the real bridge)
 ```bash
-fbsy at-bridge run [--config PATH --interval N --no-poll]   # same as `fbsy run at-bridge`
-fbsy at-bridge sync [--once] [--device GATE-01]             # pull attendance now, then exit
-fbsy at-bridge config validate          # validate config.json (exit 0/1)
-fbsy at-bridge config show              # print config with secrets redacted
-fbsy at-bridge config path              # print the config path fbsy uses
-fbsy at-bridge config setup             # (re)run the interactive setup wizard
-fbsy at-bridge doctor [--deep] [--json] # readiness; --deep tests live device + webhook
-fbsy at-bridge devices list             # list configured devices (no secrets)
-fbsy at-bridge devices test GATE-01     # test TCP connection to one device
-fbsy at-bridge webhook test GATE-01     # send an empty batch to verify the webhook
+fbsy bridge run [--config PATH --interval N --no-poll]   # same as `fbsy run bridge`
+fbsy bridge sync [--once] [--device GATE-01]             # pull attendance now, then exit
+fbsy bridge config validate          # validate config.json (exit 0/1)
+fbsy bridge config show              # print config with secrets redacted
+fbsy bridge config path              # print the config path fbsy uses
+fbsy bridge config setup             # (re)run the interactive setup wizard
+fbsy bridge doctor [--deep] [--json] # readiness; --deep tests live device + webhook
+fbsy bridge devices list             # list configured devices (no secrets)
+fbsy bridge devices test GATE-01     # test TCP connection to one device
+fbsy bridge webhook test GATE-01     # send an empty batch to verify the webhook
 ```
 
 ### Mock servers (local testing)
@@ -179,26 +179,35 @@ Full CLI reference: [docs/CLI.md](docs/CLI.md)
 
 ## The live dashboard (`fbsy dashboard`)
 
-A full-screen terminal UI that auto-refreshes and lets you control services without leaving the screen:
+A full-screen terminal UI that auto-refreshes and lets you control services — by single key or by typing a command:
 
 ```
-┌ fbsy  service dashboard ─────────────────────────────┐
-│ SERVICE    STATUS   PID    PORT  UPTIME  DESCRIPTION  │
-│ at-bridge  running  4821   7431  2m10s   attendance…  │  ← selected row
-│ zkteco     running  4830   4370  1m55s   mock device  │
-│ hrms       stopped  -      -     -       mock HRMS     │
-├ logs: at-bridge (running) ───────────────────────────┤
-│ ➡ Received HRMS Event Payload …                       │  ← live tail
-└──────────────────────────────────────────────────────┘
+┌ fbsy  service dashboard   —  : for command, q to quit ┐
+│ SERVICE    STATUS   PID    PORT  UPTIME  DESCRIPTION   │
+│ ▶ bridge   running  4821   7431  2m10s   attendance…   │  ← selected (cyan ▶)
+│   zkteco   running  4830   4370  1m55s   mock device   │
+│   hrms     stopped  -      -     -       mock HRMS      │  ← red = stopped
+├ logs: bridge (running) ───────────────────────────────┤
+│ ➡ Received HRMS Event Payload …                        │  ← live tail
+├ commands ─────────────────────────────────────────────┤
+│ ↑/↓ select  s start  x stop  r restart  y sync  l logs │
+│ : command — start|stop|restart <svc> · sync · logs …   │
+├───────────────────────────────────────────────────────┤
+│ : start zkteco                                         │  ← command input
+└───────────────────────────────────────────────────────┘
 ```
 
-Keys: **↑/↓** (or `j`/`k`) select · **s** start · **x** stop · **r** restart · **l** toggle log pane · **q**/Esc quit. Needs a real terminal (prints a hint if piped).
+**Two ways to drive it:**
+- **Single keys:** ↑/↓ (or j/k) select · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle logs · `q`/Esc quit.
+- **Command bar:** press `:` then type a full command — `start|stop|restart <svc>`, `sync [deviceCode]`, `logs <svc>`, `select <svc>`, `help`, `quit`. The available commands are always listed in the panel.
+
+Needs a real terminal (prints a hint if piped).
 
 ---
 
-## at-bridge HTTP API
+## bridge HTTP API
 
-While `at-bridge` is running it also exposes a local HTTP API on `127.0.0.1:<bridgePort>` (default `7431`):
+While `bridge` is running it also exposes a local HTTP API on `127.0.0.1:<bridgePort>` (default `7431`):
 
 ```
 GET  /health                 — agent status, device states, last sync result
@@ -245,7 +254,7 @@ fbsy run zkteco                    # mock ZKTeco device on :4370
 
 # config.json with vpsWebhookUrl=http://127.0.0.1:8800/webhook
 # and a device at deviceIp 127.0.0.1, devicePort 4370
-fbsy at-bridge sync --once         # pulls from the mock device, forwards to mock HRMS
+fbsy bridge sync --once         # pulls from the mock device, forwards to mock HRMS
 
 fbsy logs hrms                     # see the events the mock HRMS received
 fbsy dashboard                     # watch all three services live
@@ -268,7 +277,7 @@ bash scripts/install-hooks.sh
 cargo build
 cargo test
 cargo run -- show
-cargo run -- at-bridge doctor
+cargo run -- bridge doctor
 ```
 
 To build a release binary locally:
@@ -288,7 +297,7 @@ Full dev guide: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 ```
 src/
 ├── cli/          — argument parsing (clap), command dispatch
-├── services/     — ServiceKind: the at-bridge / zkteco / hrms identities
+├── services/     — ServiceKind: the bridge / zkteco / hrms identities
 ├── config/       — BridgeConfig model, validation, defaults
 ├── domain/       — pure types: RawAttendance, HrmsEvent, FingerTemplate
 ├── ports/        — traits: DeviceClient, HrmsClient, ConfigStore

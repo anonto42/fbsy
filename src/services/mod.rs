@@ -19,16 +19,17 @@ impl ServiceKind {
     /// Stable on-disk / CLI name.
     pub fn name(self) -> &'static str {
         match self {
-            ServiceKind::AtBridge => "at-bridge",
+            ServiceKind::AtBridge => "bridge",
             ServiceKind::Zkteco => "zkteco",
             ServiceKind::Hrms => "hrms",
         }
     }
 
-    /// Parse a service name; `None` if unknown.
+    /// Parse a service name; `None` if unknown. `at-bridge` is accepted as a
+    /// legacy alias for `bridge`.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "at-bridge" => Some(ServiceKind::AtBridge),
+            "bridge" | "at-bridge" => Some(ServiceKind::AtBridge),
             "zkteco" => Some(ServiceKind::Zkteco),
             "hrms" => Some(ServiceKind::Hrms),
             _ => None,

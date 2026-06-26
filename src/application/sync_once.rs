@@ -49,6 +49,39 @@ pub fn run(config: Option<PathBuf>, device: Option<String>) -> Result<()> {
     }
 }
 
+/// Run a sync for all/one device and return a one-line summary, without
+/// printing. Used by the TUI dashboard where stdout is the alternate screen.
+pub fn run_summary(config: Option<PathBuf>, device: Option<String>) -> Result<String> {
+    let path = config.unwrap_or_else(default_config_path);
+    let store = JsonConfigStore;
+    let cfg = store.load(&path)?;
+    let targets = select_targets(&cfg.devices, device.as_deref())?;
+
+    let connector = Arc::new(ZktecoTcpConnector);
+    let hrms = Arc::new(ReqwestHrmsClient::default());
+    let results = targets
+        .into_iter()
+        .map(|device| {
+            DeviceSyncState::new(
+                device.clone(),
+                cfg.vps_webhook_url.clone(),
+                connector.clone(),
+                hrms.clone(),
+            )
+            .sync_once()
+        })
+        .collect::<Vec<_>>();
+
+    let pulled: usize = results.iter().map(|r| r.pulled).sum();
+    let forwarded: usize = results.iter().map(|r| r.forwarded).sum();
+    let ok = results.iter().all(|r| r.ok);
+    Ok(format!(
+        "sync: {} device(s), pulled {pulled}, forwarded {forwarded}{}",
+        results.len(),
+        if ok { "" } else { " (some failed)" }
+    ))
+}
+
 fn select_targets(
     devices: &[BridgeDeviceConfig],
     selected: Option<&str>,

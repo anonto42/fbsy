@@ -5,12 +5,12 @@ piece of functionality, and understand what happens technically at each step.
 
 `fbsy` is a small **service manager** for a biometric attendance bridge. One binary
 installs itself, then starts/stops/monitors long-running **services** by name. The main
-service, `at-bridge`, pulls attendance from one or more ZKTeco devices over TCP and
+service, `bridge`, pulls attendance from one or more ZKTeco devices over TCP and
 forwards it to your HRMS webhook.
 
 ```
 GATE-01  ─┐
-GATE-02  ─┼─TCP 4370─▶  fbsy at-bridge (office machine)  ─HTTPS JSON─▶  one HRMS webhook
+GATE-02  ─┼─TCP 4370─▶  fbsy bridge (office machine)  ─HTTPS JSON─▶  one HRMS webhook
 FLOOR-3  ─┘
 ```
 
@@ -23,7 +23,7 @@ Three ideas explain everything else:
 1. **Services.** `fbsy` manages three of them:
    | Service | Role |
    |---|---|
-   | `at-bridge` | the real bridge — device → HRMS. Run this in production. |
+   | `bridge` | the real bridge — device → HRMS. Run this in production. |
    | `zkteco` | a mock ZKTeco device (fake attendance) for testing without hardware. |
    | `hrms` | a mock HRMS webhook that prints what it receives, for testing. |
 
@@ -84,7 +84,7 @@ fbsy --help
 ```
 Shows the surface: lifecycle (`install`/`uninstall`), service control
 (`run`/`show`/`dashboard`/`status`/`logs`/`close`), and the three services as their own
-command groups (`at-bridge`, `zkteco`, `hrms`). Running `fbsy` with no command = `fbsy show`.
+command groups (`bridge`, `zkteco`, `hrms`). Running `fbsy` with no command = `fbsy show`.
 
 ### Step 2 — Start the mock services (testing without hardware)
 ```bash
@@ -102,14 +102,14 @@ output to `logs/<svc>.log`. The parent records the registry entry and exits; the
 keeps running.
 
 ### Step 3 — Configure the bridge
-On a real first run, `fbsy run at-bridge` launches an **interactive wizard** that asks for
+On a real first run, `fbsy run bridge` launches an **interactive wizard** that asks for
 the webhook URL, device IP/port, deviceCode, apiKey, etc., and writes
 `config/config.json`. You can also run the wizard directly:
 ```bash
-fbsy at-bridge config setup       # interactive wizard
-fbsy at-bridge config validate    # check the config (exit 0/1)
-fbsy at-bridge config show        # print config with secrets redacted (apiKey → ***)
-fbsy at-bridge config path        # print the config file path
+fbsy bridge config setup       # interactive wizard
+fbsy bridge config validate    # check the config (exit 0/1)
+fbsy bridge config show        # print config with secrets redacted (apiKey → ***)
+fbsy bridge config path        # print the config file path
 ```
 A minimal config for the mock setup (what the wizard produces):
 ```json
@@ -126,7 +126,7 @@ A minimal config for the mock setup (what the wizard produces):
 
 ### Step 4 — Start the bridge
 ```bash
-fbsy run at-bridge
+fbsy run bridge
 ```
 - **No config yet** → offers the setup wizard.
 - **Configured** → spawns the bridge detached on `bridgePort` (7431) and records its registry entry.
@@ -138,9 +138,9 @@ exposes a local HTTP API (see §5).
 ### Step 5 — Watch the pipeline
 ```bash
 fbsy show                       # table: SERVICE STATUS PID PORT UPTIME
-fbsy at-bridge sync --once      # pull attendance now, then exit
+fbsy bridge sync --once      # pull attendance now, then exit
 fbsy logs hrms -n 20            # see what the HRMS received
-fbsy status at-bridge           # detail for one service
+fbsy status bridge           # detail for one service
 ```
 A successful one-shot sync prints:
 ```json
@@ -158,18 +158,31 @@ and the HRMS log shows the forwarded events:
 ```bash
 fbsy dashboard
 ```
-A full-screen TUI (needs a real terminal). Keys:
+A full-screen TUI (needs a real terminal). It has **two ways to drive it**:
 
+**Single keys:**
 | Key | Action |
 |---|---|
 | ↑/↓ or k/j | move selection |
 | s | start selected service |
 | x | stop selected service |
 | r | restart selected service |
+| y | sync now (bridge) |
 | l | toggle the log pane (live tail of the selected service) |
 | q / Esc | quit (restores the terminal cleanly) |
 
-It auto-refreshes every 250 ms from the **same registry + liveness check** that `fbsy show`
+**Command bar:** press `:` then type a command, Enter to run, Esc to cancel:
+| Command | Action |
+|---|---|
+| `start\|stop\|restart <svc>` | control any service by name |
+| `sync [deviceCode]` | run a sync (all devices, or one) |
+| `logs <svc>` | focus the log pane on a service |
+| `select <svc>` | move the selection |
+| `help` | list commands |
+| `quit` | exit |
+
+The available commands are always shown in the dashboard's **commands** panel. It
+auto-refreshes every 250 ms from the **same registry + liveness check** that `fbsy show`
 uses — it is not a separate implementation.
 
 ### Step 7 — Logs, status, stop
@@ -193,24 +206,24 @@ your shell rc.
 ```
 fbsy install | uninstall
 
-fbsy run <at-bridge|zkteco|hrms> [service flags]
+fbsy run <bridge|zkteco|hrms> [service flags]
 fbsy show
 fbsy dashboard
 fbsy status <service>
 fbsy logs <service> [-n N] [--follow]
 fbsy close <service>
 
-fbsy at-bridge run [--config PATH --interval N --no-poll]
-fbsy at-bridge sync [--once] [--device CODE] [--config PATH]
-fbsy at-bridge config <validate|show|path|setup>
-fbsy at-bridge doctor [--deep] [--json] [--config PATH]
-fbsy at-bridge devices <list | test CODE>
-fbsy at-bridge webhook test CODE
+fbsy bridge run [--config PATH --interval N --no-poll]
+fbsy bridge sync [--once] [--device CODE] [--config PATH]
+fbsy bridge config <validate|show|path|setup>
+fbsy bridge doctor [--deep] [--json] [--config PATH]
+fbsy bridge devices <list | test CODE>
+fbsy bridge webhook test CODE
 
 fbsy zkteco run [-p 4370 --records 5]
 fbsy hrms   run [-p 8800]
 ```
-`fbsy run at-bridge` and `fbsy at-bridge run` are the same thing.
+`fbsy run bridge` and `fbsy bridge run` are the same thing.
 
 ---
 
@@ -245,8 +258,8 @@ own `deviceCode` + `apiKey` + `organizationId` and runs on its **own scheduler t
 its own `syncIntervalSeconds`. One offline device never blocks the others. `deviceCode`s
 must be unique.
 
-### at-bridge HTTP API
-While `at-bridge` runs it serves a local API on `127.0.0.1:<bridgePort>` (default 7431):
+### bridge HTTP API
+While `bridge` runs it serves a local API on `127.0.0.1:<bridgePort>` (default 7431):
 ```
 GET  /health                 — agent + per-device status + last sync result
 POST /sync                   — trigger a sync for all devices
@@ -309,7 +322,7 @@ results — so the server can push to devices without any inbound connection to 
 ## 8. Teardown / clean slate
 
 ```bash
-fbsy close at-bridge && fbsy close zkteco && fbsy close hrms   # stop everything
+fbsy close bridge && fbsy close zkteco && fbsy close hrms   # stop everything
 fbsy uninstall                                                 # remove binary, keep data
 rm -rf ~/.config/fbsy                                          # full wipe (optional)
 ```

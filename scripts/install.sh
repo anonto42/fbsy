@@ -109,10 +109,10 @@ mv -f "$bin_tmp" "$install_dir/fbsy"
 green "Installed fbsy to $install_dir/fbsy"
 
 # ── 7. Finish setup (PATH + data dirs) via the binary itself ─────────────────
+# `fbsy install` prints its own "open a new shell" guidance, so the script does
+# not repeat it on success.
 if ! "$install_dir/fbsy" install; then
-  info "Run '$install_dir/fbsy install' manually to finish PATH setup."
+  echo
+  info "Installed the binary, but setup did not finish."
+  info "Run '$install_dir/fbsy install' manually, then open a new shell."
 fi
-
-# ── 8. Done ──────────────────────────────────────────────────────────────────
-echo
-green "Done. Open a new shell, then run: fbsy --help"

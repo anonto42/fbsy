@@ -8,11 +8,11 @@ the live dashboard. Each stage notes **what it touches on the machine**.
 │  your terminal  │ ─────────────────────▶ │  ~/.local/bin    │  binary on PATH
 └─────────────────┘                        │  ~/.config/fbsy  │  config / logs / run
                                            └──────────────────┘
-        │ 2. fbsy run at-bridge (first run → wizard)
+        │ 2. fbsy run bridge (first run → wizard)
         ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  detached background processes (one per service)             │
-│   at-bridge ──pull──▶ ZKTeco device ──forward──▶ HRMS webhook │
+│   bridge ──pull──▶ ZKTeco device ──forward──▶ HRMS webhook │
 │   zkteco (mock device)        hrms (mock HRMS, local testing) │
 └──────────────────────────────────────────────────────────────┘
         │ 3. fbsy dashboard / show / logs / close
@@ -61,12 +61,12 @@ yourself). It:
 
 After this, open a new shell and `fbsy --help` works anywhere.
 
-## Stage 3 — Start the bridge (`fbsy run at-bridge`)
+## Stage 3 — Start the bridge (`fbsy run bridge`)
 
 - **First run, no config:** launches the interactive setup wizard, which writes
   `~/.config/fbsy/config/config.json` (device IP/port, webhook URL, API key, …).
 - **Configured:** spawns the bridge as a **detached background process** and records
-  `~/.config/fbsy/run/at-bridge.json` (pid, port, start time). The bridge then pulls
+  `~/.config/fbsy/run/bridge.json` (pid, port, start time). The bridge then pulls
   attendance from the device and forwards it to your HRMS webhook on its schedule.
 - **Already running:** prints status instead of starting a second copy.
 
@@ -78,7 +78,7 @@ After this, open a new shell and `fbsy --help` works anywhere.
 fbsy run hrms      # mock HRMS webhook on :8800  (prints what it receives)
 fbsy run zkteco    # mock ZKTeco device on :4370 (serves fake attendance)
 ```
-Point `at-bridge`'s config at `127.0.0.1:8800` / `127.0.0.1:4370` to exercise the full
+Point `bridge`'s config at `127.0.0.1:8800` / `127.0.0.1:4370` to exercise the full
 pipeline without real hardware.
 
 > Touches: starts background processes + registry files; no network beyond localhost.
@@ -91,9 +91,9 @@ pipeline without real hardware.
 | `fbsy show` | One-shot snapshot table (script/pipe friendly). |
 | `fbsy status <svc>` | Detail for one service. |
 | `fbsy logs <svc> [-n N] [--follow]` | Tail a service's log. |
-| `fbsy at-bridge sync --once` | Pull attendance once, on demand. |
-| `fbsy at-bridge config show/validate/setup` | Inspect or (re)configure. |
-| `fbsy at-bridge doctor --deep` | Connectivity diagnostics. |
+| `fbsy bridge sync --once` | Pull attendance once, on demand. |
+| `fbsy bridge config show/validate/setup` | Inspect or (re)configure. |
+| `fbsy bridge doctor --deep` | Connectivity diagnostics. |
 | `fbsy close <svc>` | Stop a service and clear its registry entry. |
 
 > The dashboard and `show` read the same registry + live process check; killing a service

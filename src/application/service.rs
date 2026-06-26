@@ -68,7 +68,7 @@ pub fn run_at_bridge(config: Option<PathBuf>, interval: Option<u64>, no_poll: bo
         } else {
             println!(
                 "Run {} when ready, then start the bridge again.",
-                style("fbsy at-bridge config setup").cyan()
+                style("fbsy bridge config setup").cyan()
             );
             return Ok(());
         }
@@ -78,7 +78,7 @@ pub fn run_at_bridge(config: Option<PathBuf>, interval: Option<u64>, no_poll: bo
     if let Some(entry) = registry::read(ServiceKind::AtBridge.name())? {
         if process::is_alive(entry.pid, Some(&entry.exe)) {
             println!(
-                "{} at-bridge already running (pid {}).",
+                "{} bridge already running (pid {}).",
                 style("✔").green().bold(),
                 entry.pid
             );
@@ -133,7 +133,7 @@ pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> R
 }
 
 /// Start a service with its default flags (used by the TUI dashboard). For
-/// `at-bridge` this requires an existing config — the wizard cannot run inside
+/// `bridge` this requires an existing config — the wizard cannot run inside
 /// the dashboard's alternate screen.
 pub fn default_start(kind: ServiceKind) -> Result<u32> {
     match kind {
@@ -154,7 +154,7 @@ pub fn default_start(kind: ServiceKind) -> Result<u32> {
         ),
         ServiceKind::AtBridge => {
             if !at_bridge_configured() {
-                bail!("at-bridge needs setup — run `fbsy at-bridge config setup`");
+                bail!("bridge needs setup — run `fbsy bridge config setup`");
             }
             let port = load_bridge_port(&paths::default_config_path());
             spawn_service(kind, port, &[])
@@ -262,7 +262,7 @@ pub fn stop_service(kind: ServiceKind) -> Result<bool> {
 }
 
 /// Whether the attendance bridge has a config file (the wizard can't run inside
-/// the TUI, so the dashboard checks this before offering to start `at-bridge`).
+/// the TUI, so the dashboard checks this before offering to start `bridge`).
 pub fn at_bridge_configured() -> bool {
     paths::default_config_path().exists()
 }

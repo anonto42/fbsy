@@ -2,7 +2,7 @@
 //!
 //! `fbsy` is a service manager. Top-level verbs (`install`, `run`, `show`,
 //! `close`, `status`, `logs`) manage background services by name; each service
-//! also has its own command group (`at-bridge`, `zkteco`, `hrms`) exposing its
+//! also has its own command group (`bridge`, `zkteco`, `hrms`) exposing its
 //! specific flags. A hidden `__service-run` subcommand is the entry point the
 //! detached child process re-enters through.
 
@@ -31,7 +31,7 @@ pub enum Command {
     Logs(LogsArgs),
 
     /// Attendance bridge: configure, run, sync, and diagnose.
-    #[command(name = "at-bridge")]
+    #[command(name = "bridge", visible_alias = "at-bridge")]
     AtBridge(AtBridgeArgs),
     /// Mock ZKTeco device server.
     Zkteco(ZktecoArgs),
@@ -54,7 +54,7 @@ pub struct RunArgs {
 #[derive(Debug, Subcommand)]
 pub enum RunService {
     /// Start the attendance bridge (interactive first run if unconfigured).
-    #[command(name = "at-bridge")]
+    #[command(name = "bridge", visible_alias = "at-bridge")]
     AtBridge {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -79,13 +79,13 @@ pub enum RunService {
 
 #[derive(Debug, Args)]
 pub struct ServiceSelector {
-    /// Service name: at-bridge | zkteco | hrms
+    /// Service name: bridge | zkteco | hrms
     pub service: String,
 }
 
 #[derive(Debug, Args)]
 pub struct LogsArgs {
-    /// Service name: at-bridge | zkteco | hrms
+    /// Service name: bridge | zkteco | hrms
     pub service: String,
     /// Number of trailing lines to print.
     #[arg(short = 'n', long, default_value = "50")]
@@ -95,7 +95,7 @@ pub struct LogsArgs {
     pub follow: bool,
 }
 
-// ── at-bridge service group ───────────────────────────────────────────────────
+// ── bridge service group ───────────────────────────────────────────────────
 
 #[derive(Debug, Args)]
 pub struct AtBridgeArgs {
@@ -105,7 +105,7 @@ pub struct AtBridgeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AtBridgeCommand {
-    /// Run the bridge detached (same as `fbsy run at-bridge`).
+    /// Run the bridge detached (same as `fbsy run bridge`).
     Run {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -234,7 +234,7 @@ pub enum HrmsCommand {
 
 #[derive(Debug, Args)]
 pub struct ServiceRunArgs {
-    /// Service name: at-bridge | zkteco | hrms
+    /// Service name: bridge | zkteco | hrms
     pub service: String,
     /// Remaining service-specific flags, parsed by the service itself.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

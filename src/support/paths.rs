@@ -11,7 +11,7 @@
 //!
 //! Migration: earlier versions kept `config.json` in the working directory.
 //! [`migrate_legacy_config`] copies a CWD config into the new location on first
-//! `install` or `at-bridge run` so existing setups keep working.
+//! `install` or `bridge run` so existing setups keep working.
 
 use std::path::PathBuf;
 
@@ -52,12 +52,12 @@ pub fn default_config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
-/// Per-service log file, e.g. `logs/at-bridge.log`.
+/// Per-service log file, e.g. `logs/bridge.log`.
 pub fn service_log_path(service: &str) -> PathBuf {
     log_dir().join(format!("{service}.log"))
 }
 
-/// Per-service registry/pid file, e.g. `run/at-bridge.json`.
+/// Per-service registry/pid file, e.g. `run/bridge.json`.
 pub fn service_registry_path(service: &str) -> PathBuf {
     run_dir().join(format!("{service}.json"))
 }
