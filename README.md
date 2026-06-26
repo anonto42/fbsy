@@ -1,11 +1,13 @@
 # FingerBridge (`fbsy`)
 
-Native biometric attendance bridge — connects ZKTeco devices to HRMS via webhook.
+Native biometric attendance bridge, packaged as a small **service manager** — connects ZKTeco devices to HRMS via webhook.
 
-Runs on a Windows or Linux machine inside the office LAN. Pulls attendance records from ZKTeco devices over TCP, maps them to HRMS events, and posts them to a webhook URL.
+Runs on a Windows, Linux, or macOS machine inside the office LAN. The `fbsy` binary installs itself, then starts/stops/monitors long-running **services** by name. The main service, `at-bridge`, pulls attendance from one or more ZKTeco devices over TCP, maps them to HRMS events, and posts them to your webhook URL.
 
 ```
-ZKTeco Device  ──TCP 4370──▶  fbsy (office machine)  ──HTTPS JSON──▶  HRMS API
+GATE-01  ─┐
+GATE-02  ─┼─TCP 4370─▶  fbsy at-bridge (office machine)  ─HTTPS JSON─▶  one HRMS webhook
+FLOOR-3  ─┘
 ```
 
 ---
@@ -64,12 +66,29 @@ fbsy close at-bridge
 
 `fbsy dashboard` is a full-screen live monitor — ↑/↓ select a service, `s` start, `x` stop, `r` restart, `l` toggle the log pane, `q` quit. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
 
-Local testing without real hardware — spin up the mock device + HRMS servers:
-```bash
-fbsy run hrms              # mock HRMS webhook on :8800
-fbsy run zkteco            # mock ZKTeco device on :4370
-fbsy run at-bridge         # point its config at 127.0.0.1:8800 / 127.0.0.1:4370
-```
+---
+
+## How it works
+
+`fbsy` manages three **services**, each of which runs as a **detached background process** (it survives closing the terminal) and writes a registry file so `fbsy show`/`dashboard` can track it:
+
+| Service | What it is |
+|---|---|
+| `at-bridge` | The real bridge — pulls attendance from your devices and forwards to HRMS. This is the one you run in production. |
+| `zkteco` | A mock ZKTeco device server (fake attendance) for local testing without hardware. |
+| `hrms` | A mock HRMS webhook server that prints what it receives, for local testing. |
+
+`fbsy run <service>` starts one; `fbsy show` / `fbsy dashboard` monitor them; `fbsy close <service>` stops one. Each service also has its own command group (e.g. `fbsy at-bridge sync`, `fbsy zkteco run -p 4370`).
+
+**Everything lives in one per-OS data directory** (created by `fbsy install`):
+
+| OS | Data directory |
+|---|---|
+| Linux | `~/.config/fbsy/` |
+| macOS | `~/Library/Application Support/fbsy/` |
+| Windows | `%APPDATA%\fbsy\` |
+
+with `config/config.json`, `logs/<service>.log`, and `run/<service>.json` (the pid/port registry) underneath.
 
 ---
 
@@ -96,7 +115,7 @@ fbsy run at-bridge         # point its config at 127.0.0.1:8800 / 127.0.0.1:4370
 }
 ```
 
-Multiple devices are supported — add more objects to the `devices` array.
+**Multiple devices → one HRMS** is the normal case: add more objects to the `devices` array. All devices share the top-level `vpsWebhookUrl`, but each posts with its own `deviceCode` + `apiKey` + `organizationId`, has its own `syncIntervalSeconds`, and syncs on an independent schedule — one offline device never blocks the others. `deviceCode`s must be unique. The setup wizard's "Add another device?" prompt builds this for you.
 
 Optional — enable HRMS job polling (push/pull templates):
 ```jsonc
@@ -111,51 +130,80 @@ Full config reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
 ---
 
-## CLI commands
+## Command reference
 
+### Install & lifecycle
 ```bash
-fbsy                               # same as: fbsy doctor
-fbsy doctor [--deep]               # readiness check; --deep tests live connections
-fbsy setup                         # interactive first-time wizard
-fbsy once [--device GATE-01]       # pull attendance once and exit
-fbsy serve [--interval 120]        # run scheduler + local HTTP API
-
-fbsy config validate               # validate config.json, exit 0 or 1
-fbsy config show                   # print config with secrets redacted
-fbsy config path                   # print path to config file
-
-fbsy devices list                  # list configured devices
-fbsy devices test GATE-01          # test TCP connection to one device
-fbsy webhook test GATE-01          # test HRMS webhook for one device
-
-fbsy logs path                     # print log directory
-
-fbsy test-server device --port 14370 --records 5   # mock ZKTeco device
-fbsy test-server hrms   --port 18800               # mock HRMS webhook
+fbsy install                 # copy binary to ~/.local/bin, set up PATH + data dirs
+fbsy uninstall               # remove the binary (keeps your data dir)
 ```
 
-Backward-compatible aliases (parity with the Python bridge):
+### Service management
 ```bash
-fbsy --setup
-fbsy --once [--device GATE-01]
-fbsy --interval 120
+fbsy run at-bridge           # start the bridge (wizard on first run)
+fbsy run zkteco [-p 4370 --records 5]    # start the mock device
+fbsy run hrms   [-p 8800]                # start the mock HRMS
+fbsy show                    # table of all services: status / pid / port / uptime
+fbsy dashboard               # live full-screen TUI (see below)
+fbsy status <service>        # detail for one service
+fbsy logs <service> [-n 50] [--follow]   # tail a service's log
+fbsy close <service>         # stop a service
+```
+`<service>` is `at-bridge`, `zkteco`, or `hrms`. Running `fbsy` with no command is the same as `fbsy show`.
+
+### `at-bridge` (the real bridge)
+```bash
+fbsy at-bridge run [--config PATH --interval N --no-poll]   # same as `fbsy run at-bridge`
+fbsy at-bridge sync [--once] [--device GATE-01]             # pull attendance now, then exit
+fbsy at-bridge config validate          # validate config.json (exit 0/1)
+fbsy at-bridge config show              # print config with secrets redacted
+fbsy at-bridge config path              # print the config path fbsy uses
+fbsy at-bridge config setup             # (re)run the interactive setup wizard
+fbsy at-bridge doctor [--deep] [--json] # readiness; --deep tests live device + webhook
+fbsy at-bridge devices list             # list configured devices (no secrets)
+fbsy at-bridge devices test GATE-01     # test TCP connection to one device
+fbsy at-bridge webhook test GATE-01     # send an empty batch to verify the webhook
+```
+
+### Mock servers (local testing)
+```bash
+fbsy zkteco run [-p 4370 --records 5]   # = fbsy run zkteco
+fbsy hrms   run [-p 8800]               # = fbsy run hrms
 ```
 
 Full CLI reference: [docs/CLI.md](docs/CLI.md)
 
 ---
 
-## Serve mode — HTTP API
+## The live dashboard (`fbsy dashboard`)
 
-When running `fbsy serve`, a local HTTP API listens on `127.0.0.1:7431`:
+A full-screen terminal UI that auto-refreshes and lets you control services without leaving the screen:
+
+```
+┌ fbsy  service dashboard ─────────────────────────────┐
+│ SERVICE    STATUS   PID    PORT  UPTIME  DESCRIPTION  │
+│ at-bridge  running  4821   7431  2m10s   attendance…  │  ← selected row
+│ zkteco     running  4830   4370  1m55s   mock device  │
+│ hrms       stopped  -      -     -       mock HRMS     │
+├ logs: at-bridge (running) ───────────────────────────┤
+│ ➡ Received HRMS Event Payload …                       │  ← live tail
+└──────────────────────────────────────────────────────┘
+```
+
+Keys: **↑/↓** (or `j`/`k`) select · **s** start · **x** stop · **r** restart · **l** toggle log pane · **q**/Esc quit. Needs a real terminal (prints a hint if piped).
+
+---
+
+## at-bridge HTTP API
+
+While `at-bridge` is running it also exposes a local HTTP API on `127.0.0.1:<bridgePort>` (default `7431`):
 
 ```
 GET  /health                 — agent status, device states, last sync result
-POST /sync                   — trigger sync for all devices
-POST /sync?device=GATE-01    — trigger sync for one device
+POST /sync                   — trigger a sync for all devices
+POST /sync?device=GATE-01    — trigger a sync for one device
 ```
 
-Example:
 ```bash
 curl http://127.0.0.1:7431/health
 curl -X POST http://127.0.0.1:7431/sync
@@ -187,15 +235,19 @@ curl -X POST http://127.0.0.1:7431/sync
 
 ## Local testing (no real device needed)
 
+Spin up both mock services, point a config at them, and run a one-shot sync:
+
 ```bash
-# Terminal 1 — mock HRMS webhook
-fbsy test-server hrms --port 18800
+fbsy run hrms                      # mock HRMS webhook on :8800
+fbsy run zkteco                    # mock ZKTeco device on :4370
 
-# Terminal 2 — mock ZKTeco device
-fbsy test-server device --port 14370 --records 5
+# config.json with vpsWebhookUrl=http://127.0.0.1:8800/webhook
+# and a device at deviceIp 127.0.0.1, devicePort 4370
+fbsy at-bridge sync --once         # pulls from the mock device, forwards to mock HRMS
 
-# Terminal 3 — run sync against mocks
-fbsy once --config config.mock.example.json
+fbsy logs hrms                     # see the events the mock HRMS received
+fbsy dashboard                     # watch all three services live
+fbsy close zkteco && fbsy close hrms
 ```
 
 ---
@@ -208,12 +260,13 @@ Requirements: Rust stable (1.75+)
 git clone https://github.com/anonto42/fbsy
 cd fbsy
 
-# Install git hooks (runs fmt + clippy + tests on every commit)
+# Install git hooks (runs fmt + clippy + tests, and auto-bumps the version on every commit)
 bash scripts/install-hooks.sh
 
 cargo build
 cargo test
-cargo run -- doctor
+cargo run -- show
+cargo run -- at-bridge doctor
 ```
 
 To build a release binary locally:
@@ -222,7 +275,7 @@ cargo build --release
 # binary at: target/release/fbsy
 ```
 
-Releases are built automatically by GitHub Actions on every version bump in `Cargo.toml`.
+The pre-commit hook auto-increments the patch version in `Cargo.toml` (skip with `FBSY_NO_BUMP=1`), and GitHub Actions publishes a cross-platform release on every push with a new version — so each push ships binaries automatically.
 
 Full dev guide: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 
@@ -233,13 +286,19 @@ Full dev guide: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 ```
 src/
 ├── cli/          — argument parsing (clap), command dispatch
+├── services/     — ServiceKind: the at-bridge / zkteco / hrms identities
 ├── config/       — BridgeConfig model, validation, defaults
 ├── domain/       — pure types: RawAttendance, HrmsEvent, FingerTemplate
 ├── ports/        — traits: DeviceClient, HrmsClient, ConfigStore
-├── adapters/     — implementations: ZKTeco TCP, reqwest HRMS, JSON config file
-├── application/  — use cases: sync_once, serve, doctor, setup
-└── runtime/      — DeviceSyncState (per-device lock), job poller, scheduler
+├── adapters/     — implementations: ZKTeco TCP+UDP, reqwest HRMS, JSON config file
+├── application/  — use cases: install, service (run/show/close/status/logs),
+│                   dashboard (ratatui TUI), serve, sync_once, doctor, setup, test_server
+└── runtime/      — DeviceSyncState (per-device lock + safety rule), registry
+                    (pid/port files), process (detached spawn / liveness / kill),
+                    job poller, scheduler
 ```
+
+The service model: `fbsy run X` spawns a detached child that re-enters the binary through a hidden `__service-run` subcommand and runs the matching blocking loop (`serve` for the bridge, `test_server` for the mocks). The parent records a registry file and exits; `show`/`dashboard`/`close` operate on that registry plus a live process check.
 
 Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODEBASE_ARCHITECTURE_DECISION.md)
 
