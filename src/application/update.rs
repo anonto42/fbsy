@@ -121,8 +121,8 @@ pub fn run(opts: UpdateOpts) -> Result<()> {
 
 // ── The swap ──────────────────────────────────────────────────────────────────
 
-/// (kind, old pid, port, args) for each service running at update time.
-type Running = Vec<(ServiceKind, u32, Option<u16>, Vec<String>)>;
+/// (instance name, kind, old pid, port, args) for each running instance.
+type Running = Vec<(String, ServiceKind, u32, Option<u16>, Vec<String>)>;
 
 fn perform_update(latest: &str) -> Result<()> {
     paths::ensure_dirs()?;
@@ -138,7 +138,7 @@ fn perform_update(latest: &str) -> Result<()> {
             "services running: {}",
             running
                 .iter()
-                .map(|(k, ..)| k.name())
+                .map(|(name, kind, ..)| format!("{name} ({})", kind.name()))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -198,9 +198,9 @@ fn perform_update(latest: &str) -> Result<()> {
 fn capture_running() -> Running {
     let mut out = Running::new();
     for entry in registry::list().unwrap_or_default() {
-        if let Some(kind) = ServiceKind::from_name(&entry.service) {
+        if let Some(kind) = entry.kind() {
             if process::is_alive(entry.pid, Some(&entry.exe)) {
-                out.push((kind, entry.pid, entry.port, entry.args));
+                out.push((entry.service, kind, entry.pid, entry.port, entry.args));
             }
         }
     }
@@ -208,18 +208,18 @@ fn capture_running() -> Running {
 }
 
 fn restart_services(exe: &Path, running: &Running) -> Result<()> {
-    for (kind, old_pid, port, args) in running {
+    for (name, kind, old_pid, port, args) in running {
         // Terminate the OLD process by its captured pid. We can't rely on
         // `stop_service` here: once the binary is replaced, the old process's
         // exe path reads as "fbsy (deleted)", so the registry's liveness check
         // would skip the kill and leave it holding the port.
         let _ = process::terminate(*old_pid);
-        let _ = registry::clear(kind.name());
+        let _ = registry::clear(name);
         wait_for_exit(*old_pid);
 
-        service::spawn_service_with_exe(exe, *kind, *port, args)
-            .with_context(|| format!("restart {}", kind.name()))?;
-        diag(&format!("restarted {}", kind.name()));
+        service::spawn_service_with_exe(exe, *kind, name, *port, args)
+            .with_context(|| format!("restart {name} ({})", kind.name()))?;
+        diag(&format!("restarted {name} ({})", kind.name()));
     }
     Ok(())
 }
@@ -236,8 +236,8 @@ fn wait_for_exit(pid: u32) {
 
 fn health_check(running: &Running) -> bool {
     std::thread::sleep(Duration::from_millis(600));
-    for (kind, _, port, _) in running {
-        match registry::read(kind.name()) {
+    for (name, kind, _, port, _) in running {
+        match registry::read(name) {
             Ok(Some(entry)) if process::is_alive(entry.pid, Some(&entry.exe)) => {}
             _ => return false,
         }

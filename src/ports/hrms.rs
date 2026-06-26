@@ -14,7 +14,7 @@ pub const BATCH_SIZE: usize = 500;
 #[derive(Debug, Error)]
 /// Errors returned by the HRMS webhook adapter.
 pub enum HrmsError {
-    #[error("HRMS webhook client is not implemented yet")]
+    #[error("HRMS operation is not supported by this adapter")]
     NotImplemented,
     #[error("{0}")]
     Message(String),

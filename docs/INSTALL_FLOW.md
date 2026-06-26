@@ -87,14 +87,14 @@ pipeline without real hardware.
 
 | Command | What it does |
 |---|---|
-| `fbsy dashboard` | Live full-screen TUI: table of services + log pane. Keys: ↑/↓ select, `s` start, `x` stop, `r` restart, `l` toggle logs, `q` quit. |
+| `fbsy dashboard` | Live full-screen TUI: table of service instances + log pane. Keys: ↑/↓ select, `s` start, `x` stop, `r` restart, `l` toggle logs, `a` all logs, `q` quit. |
 | `fbsy show` | One-shot snapshot table (script/pipe friendly). |
-| `fbsy status <svc>` | Detail for one service. |
-| `fbsy logs <svc> [-n N] [--follow]` | Tail a service's log. |
+| `fbsy status <instance>` | Detail for one service instance. |
+| `fbsy logs <instance> [-n N] [--follow]` | Tail an instance's log. |
 | `fbsy bridge sync --once` | Pull attendance once, on demand. |
 | `fbsy bridge config show/validate/setup` | Inspect or (re)configure. |
 | `fbsy bridge doctor --deep` | Connectivity diagnostics. |
-| `fbsy close <svc>` | Stop a service and clear its registry entry. |
+| `fbsy close <instance>` | Stop an instance and clear its registry entry. |
 
 > The dashboard and `show` read the same registry + live process check; killing a service
 > out-of-band shows up as `stopped` and the stale entry is auto-cleared.

@@ -31,6 +31,8 @@ Three ideas explain everything else:
    **detached background process** (it survives closing the terminal) and writes a small
    JSON **registry file** describing it. `show`, `dashboard`, `status`, and `close` all
    operate on that registry plus a live check of whether the process is still alive.
+   Add `--name <instance>` when you want more than one copy of the same service, for example
+   two mock ZKTeco devices on different ports.
 
 3. **One per-OS data directory** holds everything:
    | OS | Base directory |
@@ -39,7 +41,7 @@ Three ideas explain everything else:
    | macOS | `~/Library/Application Support/fbsy/` |
    | Windows | `%APPDATA%\fbsy\` |
 
-   Inside it: `config/config.json`, `logs/<service>.log`, `run/<service>.json` (the registry).
+   Inside it: `config/config.json`, `logs/<instance>.log`, `run/<instance>.json` (the registry).
 
 ---
 
@@ -91,15 +93,23 @@ command groups (`bridge`, `zkteco`, `hrms`). Running `fbsy` with no command = `f
 fbsy run hrms      # mock HRMS webhook on :8800
 fbsy run zkteco    # mock ZKTeco device on :4370
 ```
+Multiple mock devices can run side by side by giving each one a unique instance name and port:
+```bash
+fbsy run zkteco --name dev1 -p 4370 --records 3
+fbsy run zkteco --name dev2 -p 4371 --records 8
+fbsy status dev1
+fbsy logs dev2 -n 20
+fbsy close dev1
+```
 Each prints `✔ <svc> started (pid …)` and writes `run/<svc>.json`, e.g.:
 ```json
-{ "service": "hrms", "pid": 5517, "port": 8800,
+{ "service": "hrms", "kind": "hrms", "pid": 5517, "port": 8800,
   "args": ["--port","8800"], "startedAt": "2026-…Z", "exe": "/…/fbsy" }
 ```
 *Technically:* `fbsy` re-executes itself with a hidden `__service-run <svc>` subcommand as
 a **detached child** (Unix `setsid`, Windows `DETACHED_PROCESS`), redirecting the child's
-output to `logs/<svc>.log`. The parent records the registry entry and exits; the child
-keeps running.
+output to `logs/<instance>.log`. The parent records the instance name plus service kind
+and exits; the child keeps running.
 
 ### Step 3 — Configure the bridge
 On a real first run, `fbsy run bridge` launches an **interactive wizard** that asks for
@@ -169,15 +179,17 @@ A full-screen TUI (needs a real terminal). It has **two ways to drive it**:
 | r | restart selected service |
 | y | sync now (bridge) |
 | l | toggle the log pane (live tail of the selected service) |
+| a | toggle combined logs from all running instances |
 | q / Esc | quit (restores the terminal cleanly) |
 
 **Command bar:** press `:` then type a command, Enter to run, Esc to cancel:
 | Command | Action |
 |---|---|
-| `start\|stop\|restart <svc>` | control any service by name |
+| `start <bridge\|zkteco\|hrms>` | start the default instance of a service kind |
+| `stop\|restart <instance>` | control a named instance, e.g. `dev1` |
 | `sync [deviceCode]` | run a sync (all devices, or one) |
-| `logs <svc>` | focus the log pane on a service |
-| `select <svc>` | move the selection |
+| `logs <instance>` / `logs all` | focus one log or the combined log view |
+| `select <instance>` | move the selection |
 | `help` | list commands |
 | `quit` | exit |
 
@@ -187,9 +199,9 @@ uses — it is not a separate implementation.
 
 ### Step 7 — Logs, status, stop
 ```bash
-fbsy logs <svc> [-n 50] [--follow]   # tail a service log (follow = live)
-fbsy status <svc>                     # one service's status + log path
-fbsy close <svc>                      # stop a service (SIGTERM + clear its registry)
+fbsy logs <instance> [-n 50] [--follow]   # tail a service log (follow = live)
+fbsy status <instance>                     # one service instance's status + log path
+fbsy close <instance>                      # stop an instance (SIGTERM + clear registry)
 ```
 
 ### Step 8 — Uninstall
@@ -209,19 +221,19 @@ fbsy install | uninstall
 fbsy run <bridge|zkteco|hrms> [service flags]
 fbsy show
 fbsy dashboard
-fbsy status <service>
-fbsy logs <service> [-n N] [--follow]
-fbsy close <service>
+fbsy status <instance>
+fbsy logs <instance> [-n N] [--follow]
+fbsy close <instance>
 
-fbsy bridge run [--config PATH --interval N --no-poll]
+fbsy bridge run [--name NAME] [--config PATH --interval N --no-poll]
 fbsy bridge sync [--once] [--device CODE] [--config PATH]
 fbsy bridge config <validate|show|path|setup>
 fbsy bridge doctor [--deep] [--json] [--config PATH]
 fbsy bridge devices <list | test CODE>
 fbsy bridge webhook test CODE
 
-fbsy zkteco run [-p 4370 --records 5]
-fbsy hrms   run [-p 8800]
+fbsy zkteco run [--name NAME] [-p 4370 --records 5]
+fbsy hrms   run [--name NAME] [-p 8800]
 ```
 `fbsy run bridge` and `fbsy bridge run` are the same thing.
 
@@ -230,14 +242,16 @@ fbsy hrms   run [-p 8800]
 ## 5. How it works technically
 
 ### Detached process model
-`fbsy run X` → `spawn_detached`: re-exec `current_exe __service-run X [args]` with stdin
-null and stdout/stderr → `logs/X.log`. Unix uses `setsid` (the child joins a new session,
+`fbsy run X --name NAME` → `spawn_detached`: re-exec `current_exe __service-run X [args]`
+with stdin null and stdout/stderr → `logs/NAME.log`. Unix uses `setsid` (the child joins a new session,
 gets reparented to init, survives the shell); Windows uses `DETACHED_PROCESS |
-CREATE_NO_WINDOW`. The parent writes `run/X.json` and exits immediately. The child runs the
-real blocking loop (`serve` for the bridge, the mock server for `zkteco`/`hrms`).
+CREATE_NO_WINDOW`. The parent writes `run/NAME.json` and exits immediately. The child runs
+the service kind's real blocking loop (`serve` for the bridge, the mock server for
+`zkteco`/`hrms`).
 
 ### Registry & liveness
-Each service has one `run/<svc>.json` with `pid`, `port`, `args`, `startedAt`, and `exe`.
+Each instance has one `run/<instance>.json` with `service` (instance name), `kind`, `pid`,
+`port`, `args`, `startedAt`, and `exe`.
 `show`/`dashboard`/`status` check liveness with `sysinfo` and compare the running process's
 **exe name** to the recorded one (guards against PID reuse). If a recorded process is gone,
 the entry is treated as `stopped` and **auto-cleared**.

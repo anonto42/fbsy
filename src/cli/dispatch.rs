@@ -39,10 +39,14 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::AtBridge(args) => dispatch_at_bridge(args.command),
 
         Command::Zkteco(args) => match args.command {
-            ZktecoCommand::Run { port, records } => application::service::run_zkteco(port, records),
+            ZktecoCommand::Run {
+                name,
+                port,
+                records,
+            } => application::service::run_zkteco(name, port, records),
         },
         Command::Hrms(args) => match args.command {
-            HrmsCommand::Run { port } => application::service::run_hrms(port),
+            HrmsCommand::Run { name, port } => application::service::run_hrms(name, port),
         },
 
         Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
@@ -52,22 +56,28 @@ pub fn run(cli: Cli) -> Result<()> {
 fn dispatch_run(service: RunService) -> Result<()> {
     match service {
         RunService::AtBridge {
+            name,
             config,
             interval,
             no_poll,
-        } => application::service::run_at_bridge(config, interval, no_poll),
-        RunService::Zkteco { port, records } => application::service::run_zkteco(port, records),
-        RunService::Hrms { port } => application::service::run_hrms(port),
+        } => application::service::run_at_bridge(name, config, interval, no_poll),
+        RunService::Zkteco {
+            name,
+            port,
+            records,
+        } => application::service::run_zkteco(name, port, records),
+        RunService::Hrms { name, port } => application::service::run_hrms(name, port),
     }
 }
 
 fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
     match command {
         AtBridgeCommand::Run {
+            name,
             config,
             interval,
             no_poll,
-        } => application::service::run_at_bridge(config, interval, no_poll),
+        } => application::service::run_at_bridge(name, config, interval, no_poll),
         AtBridgeCommand::Sync { device, config, .. } => application::sync_once::run(config, device),
         AtBridgeCommand::Config { command } => match command {
             ConfigCommand::Validate { path } => application::config::validate(path),

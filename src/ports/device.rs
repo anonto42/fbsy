@@ -13,7 +13,7 @@ use crate::{
 #[derive(Debug, Error)]
 /// Errors returned by the ZKTeco device adapter.
 pub enum DeviceError {
-    #[error("device protocol is not implemented yet")]
+    #[error("device operation is not supported by this adapter")]
     NotImplemented,
     #[error("{0}")]
     Message(String),

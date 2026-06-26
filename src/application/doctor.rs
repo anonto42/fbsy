@@ -16,6 +16,7 @@ use crate::{
         config_file::JsonConfigStore, device_zkteco_tcp::ZktecoTcpConnector,
         hrms_reqwest::ReqwestHrmsClient,
     },
+    application::service,
     config::{BridgeConfig, BridgeDeviceConfig},
     ports::{config_store::ConfigStore, device::DeviceConnector, hrms::HrmsClient},
     support::paths::{default_config_path, log_dir},
@@ -217,7 +218,7 @@ fn build_report(config_path: &Path, deep: bool) -> DoctorReport {
         bridge_port_available: None,
         device_count: 0,
         job_polling_enabled: false,
-        service_status: "not implemented".to_string(),
+        service_status: service_status(),
         devices: Vec::new(),
         next_steps: Vec::new(),
     };
@@ -321,16 +322,28 @@ fn port_available(port: u16) -> bool {
 
 fn next_steps(report: &DoctorReport) -> Vec<String> {
     if !report.config_exists {
-        return vec!["fbsy setup".to_string()];
+        return vec!["fbsy bridge config setup".to_string()];
     }
     if !report.config_valid {
-        return vec!["fix config.json and run fbsy config validate".to_string()];
+        return vec!["fix config.json and run fbsy bridge config validate".to_string()];
     }
     vec![
-        "fbsy doctor --deep".to_string(),
-        "fbsy once --device <DEVICE_CODE>".to_string(),
-        "fbsy serve".to_string(),
+        "fbsy bridge doctor --deep".to_string(),
+        "fbsy bridge sync --device <DEVICE_CODE>".to_string(),
+        "fbsy run bridge".to_string(),
     ]
+}
+
+fn service_status() -> String {
+    let running = service::snapshot();
+    if running.is_empty() {
+        return "stopped".to_string();
+    }
+    running
+        .iter()
+        .map(|svc| format!("{} ({})", svc.name, svc.kind.name()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn print_report(report: &DoctorReport) {

@@ -1,6 +1,6 @@
 # CLI Design
 
-The Rust bridge uses `clap` for command parsing.
+The Rust bridge ships as `fbsy` and uses `clap` for command parsing.
 
 ## Selected CLI Stack
 
@@ -8,11 +8,6 @@ The Rust bridge uses `clap` for command parsing.
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
-```
-
-Add later:
-
-```toml
 dialoguer = "0.11"
 console = "0.15"
 indicatif = "0.17"
@@ -24,38 +19,35 @@ comfy-table = "7"
 Recommended command style:
 
 ```bash
-fingerbridge doctor
-fingerbridge setup
-fingerbridge once
-fingerbridge serve --interval 120
-fingerbridge config validate
-fingerbridge config show
-fingerbridge autostart install
-fingerbridge autostart uninstall
+fbsy show
+fbsy dashboard
+fbsy run bridge
+fbsy run zkteco --name dev1 -p 4370
+fbsy bridge doctor
+fbsy bridge sync --once
+fbsy bridge config validate
+fbsy bridge config show
 ```
 
-Compatibility flags from the Python version:
+Compatibility aliases:
 
 ```bash
-fingerbridge --setup
-fingerbridge --once
-fingerbridge --interval 120
-fingerbridge --install-autostart
-fingerbridge --uninstall-autostart
+fbsy bridge run
+fbsy at-bridge run
 ```
 
 ## Command Responsibilities
 
 | Command | Purpose |
 | --- | --- |
-| `doctor` | Show local readiness and config path |
-| `setup` | Run first-time configuration wizard |
-| `once` | Pull and forward attendance once, then exit |
-| `serve` | Start HTTP API and background scheduler |
-| `config validate` | Validate `config.json` |
-| `config show` | Print redacted config |
-| `autostart install` | Register startup task/service |
-| `autostart uninstall` | Remove startup task/service |
+| `run <service>` | Start a detached named service instance |
+| `show` | List running instances |
+| `dashboard` | Monitor/control instances in a TUI |
+| `bridge doctor` | Show local readiness and config path |
+| `bridge config setup` | Run first-time configuration wizard |
+| `bridge sync --once` | Pull and forward attendance once, then exit |
+| `bridge config validate` | Validate `config.json` |
+| `bridge config show` | Print redacted config |
 
 ## First Output Goal
 
@@ -67,7 +59,6 @@ Config:  missing
 Path:    ./config.json
 
 Next:
-  fingerbridge setup
-  fingerbridge config validate
+fbsy bridge config setup
+fbsy bridge config validate
 ```
-

@@ -22,7 +22,9 @@ src/
 │   ├── sync_once.rs
 │   ├── serve.rs
 │   ├── setup.rs
-│   └── autostart.rs
+│   ├── service.rs
+│   ├── dashboard.rs
+│   └── update.rs
 ├── config/
 │   ├── mod.rs
 │   ├── model.rs
@@ -41,10 +43,15 @@ src/
 ├── adapters/
 │   ├── mod.rs
 │   ├── config_file.rs
-│   └── hrms_placeholder.rs
+│   ├── device_zkteco_tcp.rs
+│   ├── hrms_http.rs
+│   └── hrms_reqwest.rs
 ├── runtime/
 │   ├── mod.rs
-│   └── scheduler.rs
+│   ├── process.rs
+│   ├── registry.rs
+│   ├── job_poller.rs
+│   └── sync_state.rs
 └── support/
     ├── mod.rs
     ├── paths.rs
@@ -256,7 +263,7 @@ What happens:
 Example:
 
 ```bash
-fingerbridge doctor
+fbsy bridge doctor
 ```
 
 becomes:
@@ -295,12 +302,15 @@ Important code shape:
 ```rust
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Doctor,
-    Setup,
-    Once { config: Option<PathBuf> },
-    Serve { interval: Option<u64>, config: Option<PathBuf> },
-    Config { command: ConfigCommand },
-    Autostart { command: AutostartCommand },
+    Run(RunArgs),
+    Dashboard,
+    Show,
+    Close(ServiceSelector),
+    Status(ServiceSelector),
+    Logs(LogsArgs),
+    AtBridge(AtBridgeArgs),
+    Zkteco(ZktecoArgs),
+    Hrms(HrmsArgs),
 }
 ```
 
@@ -311,16 +321,13 @@ This file defines every command group the program understands.
 Example:
 
 ```bash
-fingerbridge serve --interval 120
+fbsy run bridge --interval 120
 ```
 
 becomes:
 
 ```rust
-Command::Serve {
-    interval: Some(120),
-    config: None,
-}
+Command::Run(...)
 ```
 
 ## 8. `cli/dispatch.rs`: CLI Calls Application
@@ -382,9 +389,11 @@ Each file is one product action:
 | `doctor.rs` | Print local status |
 | `config.rs` | Validate/show config |
 | `sync_once.rs` | Run one sync attempt |
-| `serve.rs` | Start service mode later |
-| `setup.rs` | Setup wizard later |
-| `autostart.rs` | OS startup integration later |
+| `serve.rs` | Run the bridge HTTP API and schedulers |
+| `setup.rs` | Interactive setup wizard |
+| `service.rs` | Start/stop/status/logs for detached services |
+| `dashboard.rs` | Live service dashboard |
+| `update.rs` | Safe self-update flow |
 
 Example:
 
@@ -393,8 +402,8 @@ pub fn run(config: Option<PathBuf>) -> Result<()> {
     let path = config.unwrap_or_else(default_config_path);
     let store = JsonConfigStore;
     let _cfg = store.load(&path)?;
-    let result = placeholder_result();
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    let summary = sync_once::run_summary(config, device)?;
+    println!("{summary}");
     Ok(())
 }
 ```
@@ -622,18 +631,18 @@ config/impls.rs
   checks required fields and limits
 ```
 
-## 17. Request Flow Example: `cargo run -- once`
+## 17. Request Flow Example: `cargo run -- bridge sync --once`
 
 ```text
 main.rs
   starts executable
 
 cli/dispatch.rs
-  matches Command::Once
+  matches Command::AtBridge -> Sync
 
 application/sync_once.rs
   loads config
-  returns placeholder SyncResult
+  connects to devices and forwards HRMS events
 
 domain/sync_result.rs
   defines the JSON result shape

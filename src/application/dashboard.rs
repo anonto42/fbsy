@@ -35,6 +35,7 @@ enum Mode {
 struct App {
     selected: usize,
     show_logs: bool,
+    all_logs: bool,
     mode: Mode,
     input: String,
     status: String,
@@ -46,15 +47,12 @@ impl App {
         Self {
             selected: 0,
             show_logs: true,
+            all_logs: false,
             mode: Mode::Normal,
             input: String::new(),
             status: "ready".to_string(),
             quit: false,
         }
-    }
-
-    fn selected_kind(&self) -> ServiceKind {
-        ServiceKind::all()[self.selected]
     }
 }
 
@@ -76,10 +74,12 @@ pub fn run() -> Result<()> {
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
     let mut app = App::new();
-    let count = ServiceKind::all().len();
 
     while !app.quit {
-        let rows = service::snapshot();
+        let rows = dashboard_rows(service::snapshot());
+        if app.selected >= rows.len() {
+            app.selected = rows.len().saturating_sub(1);
+        }
         terminal.draw(|frame| draw(frame, &app, &rows))?;
 
         if !event::poll(TICK)? {
@@ -94,7 +94,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
 
         match app.mode {
             Mode::Command => handle_command_key(&mut app, key.code),
-            Mode::Normal => handle_normal_key(&mut app, key.code, count),
+            Mode::Normal => handle_normal_key(&mut app, key.code, &rows),
         }
     }
     Ok(())
@@ -102,7 +102,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
 
 // ── Key handling ──────────────────────────────────────────────────────────────
 
-fn handle_normal_key(app: &mut App, code: KeyCode, count: usize) {
+fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
         KeyCode::Char(':') => {
@@ -111,14 +111,35 @@ fn handle_normal_key(app: &mut App, code: KeyCode, count: usize) {
         }
         KeyCode::Up | KeyCode::Char('k') => app.selected = app.selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => {
-            if app.selected + 1 < count {
+            if app.selected + 1 < rows.len() {
                 app.selected += 1;
             }
         }
         KeyCode::Char('l') => app.show_logs = !app.show_logs,
-        KeyCode::Char('s') => run_action(app, Action::Start(app.selected_kind())),
-        KeyCode::Char('x') => run_action(app, Action::Stop(app.selected_kind())),
-        KeyCode::Char('r') => run_action(app, Action::Restart(app.selected_kind())),
+        KeyCode::Char('a') => {
+            app.all_logs = !app.all_logs;
+            app.show_logs = true;
+            app.status = if app.all_logs {
+                "showing logs from all running instances".to_string()
+            } else {
+                "showing selected instance logs".to_string()
+            };
+        }
+        KeyCode::Char('s') => {
+            if let Some(row) = rows.get(app.selected) {
+                run_action(app, Action::Start(row.kind));
+            }
+        }
+        KeyCode::Char('x') => {
+            if let Some(row) = rows.get(app.selected) {
+                run_action(app, Action::Stop(row.name.clone()));
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(row) = rows.get(app.selected) {
+                run_action(app, Action::Restart(row.name.clone(), row.kind));
+            }
+        }
         KeyCode::Char('y') => run_action(app, Action::Sync(None)),
         _ => {}
     }
@@ -150,8 +171,8 @@ fn handle_command_key(app: &mut App, code: KeyCode) {
 
 enum Action {
     Start(ServiceKind),
-    Stop(ServiceKind),
-    Restart(ServiceKind),
+    Stop(String),
+    Restart(String, ServiceKind),
     Sync(Option<String>),
 }
 
@@ -161,19 +182,21 @@ fn run_action(app: &mut App, action: Action) {
             Ok(pid) => format!("started {} (pid {pid})", kind.name()),
             Err(e) => format!("start {}: {e}", kind.name()),
         },
-        Action::Stop(kind) => match service::stop_service(kind) {
-            Ok(true) => format!("stopped {}", kind.name()),
-            Ok(false) => format!("{} was not running", kind.name()),
-            Err(e) => format!("stop {}: {e}", kind.name()),
+        Action::Stop(name) => match service::stop_instance(&name) {
+            Ok(true) => format!("stopped {name}"),
+            Ok(false) => format!("{name} was not running"),
+            Err(e) => format!("stop {name}: {e}"),
         },
-        Action::Restart(kind) => {
-            let _ = service::stop_service(kind);
-            std::thread::sleep(Duration::from_millis(150));
-            match service::default_start(kind) {
-                Ok(pid) => format!("restarted {} (pid {pid})", kind.name()),
+        Action::Restart(name, kind) => match service::restart_instance(&name) {
+            Ok(pid) => format!("restarted {name} (pid {pid})"),
+            Err(_) if name == kind.name() => match service::default_start(kind) {
+                Ok(pid) => format!("started {} (pid {pid})", kind.name()),
                 Err(e) => format!("restart {}: {e}", kind.name()),
+            },
+            Err(e) => {
+                format!("restart {name}: {e}")
             }
-        }
+        },
         Action::Sync(device) => match sync_once::run_summary(None, device) {
             Ok(summary) => summary,
             Err(e) => format!("sync failed: {e}"),
@@ -182,48 +205,57 @@ fn run_action(app: &mut App, action: Action) {
 }
 
 /// Parse and run a `:command` line. Vocabulary:
-///   start|stop|restart <service> · sync [deviceCode] · logs <service>
-///   select <service> · help · quit
+///   start <kind> · stop|restart <instance> · sync [deviceCode]
+///   logs <instance>|all · select <instance>|<kind> · help · quit
 fn execute_command(app: &mut App, line: &str) {
     let mut parts = line.split_whitespace();
     let verb = parts.next().unwrap_or("");
     let arg = parts.next();
 
-    let resolve =
-        |name: Option<&str>| -> Option<ServiceKind> { name.and_then(ServiceKind::from_name) };
+    let rows = dashboard_rows(service::snapshot());
 
     match verb {
-        "start" => match resolve(arg) {
+        "start" => match arg.and_then(ServiceKind::from_name) {
             Some(k) => run_action(app, Action::Start(k)),
             None => app.status = "usage: start <bridge|zkteco|hrms>".to_string(),
         },
-        "stop" => match resolve(arg) {
-            Some(k) => run_action(app, Action::Stop(k)),
-            None => app.status = "usage: stop <bridge|zkteco|hrms>".to_string(),
+        "stop" => match arg {
+            Some(name) => run_action(app, Action::Stop(name.to_string())),
+            None => app.status = "usage: stop <instance>".to_string(),
         },
-        "restart" => match resolve(arg) {
-            Some(k) => run_action(app, Action::Restart(k)),
-            None => app.status = "usage: restart <bridge|zkteco|hrms>".to_string(),
+        "restart" => match arg.and_then(|name| row_by_name_or_kind(&rows, name)) {
+            Some(row) => run_action(app, Action::Restart(row.name.clone(), row.kind)),
+            None => app.status = "usage: restart <instance>".to_string(),
         },
         "sync" => run_action(app, Action::Sync(arg.map(str::to_string))),
-        "logs" => match resolve(arg) {
-            Some(k) => {
-                app.selected = ServiceKind::all().iter().position(|x| *x == k).unwrap_or(0);
+        "logs" => match arg {
+            Some("all") => {
+                app.all_logs = true;
                 app.show_logs = true;
-                app.status = format!("showing logs: {}", k.name());
+                app.status = "showing logs: all running instances".to_string();
             }
-            None => app.status = "usage: logs <bridge|zkteco|hrms>".to_string(),
+            Some(name) => match row_index_by_name_or_kind(&rows, name) {
+                Some(index) => {
+                    app.selected = index;
+                    app.all_logs = false;
+                    app.show_logs = true;
+                    app.status = format!("showing logs: {}", rows[index].name);
+                }
+                None => app.status = "usage: logs <instance>|all".to_string(),
+            },
+            None => app.status = "usage: logs <instance>|all".to_string(),
         },
-        "select" => match resolve(arg) {
-            Some(k) => {
-                app.selected = ServiceKind::all().iter().position(|x| *x == k).unwrap_or(0);
-                app.status = format!("selected {}", k.name());
+        "select" => match arg.and_then(|name| row_index_by_name_or_kind(&rows, name)) {
+            Some(index) => {
+                app.selected = index;
+                app.status = format!("selected {}", rows[index].name);
             }
-            None => app.status = "usage: select <bridge|zkteco|hrms>".to_string(),
+            None => app.status = "usage: select <instance>|<kind>".to_string(),
         },
         "help" => {
             app.status =
-                "commands: start|stop|restart <svc> · sync [code] · logs <svc> · quit".to_string()
+                "commands: start <kind> · stop|restart <instance> · sync [code] · logs <name|all>"
+                    .to_string()
         }
         "quit" | "q" | "exit" => app.quit = true,
         other => app.status = format!("unknown command '{other}' (try: help)"),
@@ -293,7 +325,11 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
                 r.kind.description().to_string()
             };
             Row::new(vec![
-                Cell::from(r.kind.name()),
+                Cell::from(if r.name == r.kind.name() {
+                    r.kind.name().to_string()
+                } else {
+                    format!("{} ({})", r.name, r.kind.name())
+                }),
                 Cell::from(status_text).style(Style::default().fg(status_color)),
                 Cell::from(pid),
                 Cell::from(port),
@@ -329,12 +365,17 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
 }
 
 fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
-    let kind = app.selected_kind();
-    let running = rows.get(app.selected).map(|r| r.running).unwrap_or(false);
-    let log_path = paths::service_log_path(kind.name());
-
     let visible = area.height.saturating_sub(2) as usize;
-    let lines = service::tail_lines(&log_path, LOG_TAIL);
+    let lines = if app.all_logs {
+        service::tail_all_running(visible.max(1))
+    } else {
+        let name = rows
+            .get(app.selected)
+            .map(|r| r.name.as_str())
+            .unwrap_or(ServiceKind::AtBridge.name());
+        let log_path = paths::service_log_path(name);
+        service::tail_lines(&log_path, LOG_TAIL)
+    };
     let shown: Vec<Line> = lines
         .iter()
         .rev()
@@ -343,11 +384,20 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
         .map(|l| Line::from(l.clone()))
         .collect();
 
-    let title = format!(
-        " logs: {} ({}) ",
-        kind.name(),
-        if running { "running" } else { "stopped" }
-    );
+    let title = if app.all_logs {
+        " logs: all running instances ".to_string()
+    } else {
+        let row = rows.get(app.selected);
+        format!(
+            " logs: {} ({}) ",
+            row.map(|r| r.name.as_str()).unwrap_or("bridge"),
+            if row.map(|r| r.running).unwrap_or(false) {
+                "running"
+            } else {
+                "stopped"
+            }
+        )
+    };
     let para = Paragraph::new(shown).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(para, area);
 }
@@ -366,13 +416,14 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
     line1.extend(key("r", "restart"));
     line1.extend(key("y", "sync"));
     line1.extend(key("l", "logs"));
+    line1.extend(key("a", "all logs"));
     line1.extend(key("q", "quit"));
 
     let line2 = vec![
         Span::styled(":", Style::default().fg(Color::Yellow).bold()),
         Span::raw(" command  —  "),
         Span::styled(
-            "start|stop|restart <svc> · sync [code] · logs <svc> · select <svc> · help",
+            "start <kind> · stop|restart <instance> · sync [code] · logs <name|all> · select <name>",
             Style::default().dim(),
         ),
     ];
@@ -395,4 +446,34 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         ]),
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn dashboard_rows(mut rows: Vec<ServiceStatus>) -> Vec<ServiceStatus> {
+    for kind in ServiceKind::all() {
+        if rows.iter().any(|row| row.name == kind.name()) {
+            continue;
+        }
+        rows.push(ServiceStatus {
+            name: kind.name().to_string(),
+            kind,
+            running: false,
+            pid: None,
+            port: None,
+            url: None,
+            uptime_secs: None,
+        });
+    }
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.sort_by_key(|row| row.kind as u8);
+    rows
+}
+
+fn row_index_by_name_or_kind(rows: &[ServiceStatus], name: &str) -> Option<usize> {
+    rows.iter()
+        .position(|row| row.name == name)
+        .or_else(|| rows.iter().position(|row| row.kind.name() == name))
+}
+
+fn row_by_name_or_kind<'a>(rows: &'a [ServiceStatus], name: &str) -> Option<&'a ServiceStatus> {
+    row_index_by_name_or_kind(rows, name).and_then(|index| rows.get(index))
 }

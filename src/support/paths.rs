@@ -6,8 +6,8 @@
 //!   - Windows: %APPDATA%\fbsy
 //!   - macOS:   ~/Library/Application Support/fbsy
 //!
-//! Under that base: `config/` (config.json), `logs/` (per-service log files),
-//! and `run/` (per-service registry + pid JSON).
+//! Under that base: `config/` (config.json), `logs/` (per-instance log files),
+//! and `run/` (per-instance registry + pid JSON).
 //!
 //! Migration: earlier versions kept `config.json` in the working directory.
 //! [`migrate_legacy_config`] copies a CWD config into the new location on first
@@ -32,17 +32,17 @@ pub fn base_dir() -> PathBuf {
         .join(".fbsy")
 }
 
-/// Directory holding `config.json` and per-service configs.
+/// Directory holding `config.json` and future profile-specific configs.
 pub fn config_dir() -> PathBuf {
     base_dir().join("config")
 }
 
-/// Directory holding per-service log files.
+/// Directory holding per-instance log files.
 pub fn log_dir() -> PathBuf {
     base_dir().join("logs")
 }
 
-/// Directory holding per-service registry / pid files.
+/// Directory holding per-instance registry / pid files.
 pub fn run_dir() -> PathBuf {
     base_dir().join("run")
 }
@@ -57,12 +57,12 @@ pub fn default_config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
-/// Per-service log file, e.g. `logs/bridge.log`.
+/// Per-instance log file, e.g. `logs/bridge.log` or `logs/dev1.log`.
 pub fn service_log_path(service: &str) -> PathBuf {
     log_dir().join(format!("{service}.log"))
 }
 
-/// Per-service registry/pid file, e.g. `run/bridge.json`.
+/// Per-instance registry/pid file, e.g. `run/bridge.json` or `run/dev1.json`.
 pub fn service_registry_path(service: &str) -> PathBuf {
     run_dir().join(format!("{service}.json"))
 }

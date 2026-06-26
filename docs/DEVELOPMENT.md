@@ -9,28 +9,32 @@ cargo test
 
 If you are learning the codebase, start with
 [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md). It follows execution from
-`main.rs` through the module tree and explains the Rust keywords used in the
-current scaffold.
+`main.rs` through the module tree and explains the Rust keywords used by the
+current service manager.
 
 Create a local config:
 
 ```bash
 cp config.example.json config.json
-cargo run -- config validate
+cargo run -- bridge config validate
 ```
 
 ## Run Commands
 
 ```bash
-cargo run -- doctor
-cargo run -- config show
-cargo run -- once
-cargo run -- serve --interval 120
+cargo run -- bridge doctor
+cargo run -- bridge config show
+cargo run -- bridge sync --once
+cargo run -- run bridge
+cargo run -- run zkteco --name dev1 -p 4370
 ```
 
-## Current Scaffold Behavior
+## Current Behavior
 
-The project currently validates config and prints placeholder sync output. Real device communication and webhook forwarding are intentionally not implemented yet.
+The project is now a native `fbsy` service manager. It can run the bridge, mock
+ZKTeco devices, and a mock HRMS server as detached named instances; the bridge
+can sync attendance, serve the local HTTP API, poll HRMS jobs, and use the real
+ZKTeco TCP and HRMS HTTP adapters.
 
 The codebase now follows the researched architecture:
 
@@ -56,14 +60,10 @@ The full behavior plan is documented in
 1. Keep the CLI compiling.
 2. Add multi-device config parity with the Python bridge.
 3. Improve `doctor` and troubleshooting commands.
-4. Build sync lifecycle with fake device and fake HRMS tests.
-5. Build HRMS webhook client with retries.
-6. Add HTTP API with `axum`.
-7. Add scheduler and runtime state.
-8. Add setup wizard.
-9. Add install/service/autostart commands.
-10. Add real ZKTeco protocol adapter.
-11. Add packaging and release automation.
+4. Keep mock-device and HRMS tests green.
+5. Harden real-device protocol behavior against more firmware variants.
+6. Keep setup/install/update flows cross-platform.
+7. Add packaging and release automation.
 
 ## Important Rule
 

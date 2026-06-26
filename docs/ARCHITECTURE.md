@@ -46,8 +46,8 @@ src/
 ├── domain/              # attendance, HRMS events, sync result
 ├── application/         # use cases called by clients
 ├── ports/               # traits for outside systems
-├── adapters/            # file config store and placeholder clients
-├── runtime/             # scheduler/process runtime placeholders
+├── adapters/            # file config store, HRMS clients, ZKTeco TCP adapter
+├── runtime/             # process registry, job poller, sync state
 └── support/             # paths and redaction helpers
 ```
 

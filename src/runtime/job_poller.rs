@@ -39,6 +39,10 @@ pub fn start_job_poller(cfg: &BridgeConfig) {
 
     thread::spawn(move || {
         let client = ReqwestHrmsClient::default();
+        eprintln!(
+            "Job poller started: baseUrl={base_url}, interval={interval}s, devices={}",
+            device_codes.join(", ")
+        );
         loop {
             thread::sleep(Duration::from_secs(interval));
             if let Err(err) = poll_once(&client, &base_url, &token, &device_codes, &devices) {
@@ -59,11 +63,25 @@ fn poll_once(
         .fetch_pending_jobs(base_url, token, device_codes)
         .map_err(|err| err.to_string())?;
     let count = jobs.len();
+    if count > 0 {
+        eprintln!("Job poller fetched {count} pending job(s)");
+    }
     let connector = ZktecoTcpConnector;
     for job in jobs {
+        eprintln!(
+            "Job poller executing job={} type={} device={}",
+            job.id, job.job_type, job.device_code
+        );
         let completion = execute_job(&job, devices, &connector);
+        let ok = completion.ok;
         if let Err(err) = client.complete_job(base_url, token, &job.id, &completion) {
             eprintln!("Failed to complete job {}: {err}", job.id);
+        } else {
+            eprintln!(
+                "Job poller completed job={} status={}",
+                job.id,
+                if ok { "ok" } else { "error" }
+            );
         }
     }
     Ok(count)

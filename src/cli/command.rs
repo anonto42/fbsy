@@ -73,6 +73,9 @@ pub enum RunService {
     /// Start the attendance bridge (interactive first run if unconfigured).
     #[command(name = "bridge", visible_alias = "at-bridge")]
     AtBridge {
+        /// Instance name (default: bridge). Use to run more than one.
+        #[arg(long)]
+        name: Option<String>,
         #[arg(long)]
         config: Option<PathBuf>,
         #[arg(long)]
@@ -82,6 +85,9 @@ pub enum RunService {
     },
     /// Start the mock ZKTeco device server.
     Zkteco {
+        /// Instance name (default: zkteco). Use to run more than one.
+        #[arg(long)]
+        name: Option<String>,
         #[arg(short = 'p', long, default_value = "4370")]
         port: u16,
         #[arg(long, default_value = "5")]
@@ -89,6 +95,9 @@ pub enum RunService {
     },
     /// Start the mock HRMS webhook server.
     Hrms {
+        /// Instance name (default: hrms). Use to run more than one.
+        #[arg(long)]
+        name: Option<String>,
         #[arg(short = 'p', long, default_value = "8800")]
         port: u16,
     },
@@ -96,13 +105,13 @@ pub enum RunService {
 
 #[derive(Debug, Args)]
 pub struct ServiceSelector {
-    /// Service name: bridge | zkteco | hrms
+    /// Instance name, for example: bridge | zkteco | hrms | dev1
     pub service: String,
 }
 
 #[derive(Debug, Args)]
 pub struct LogsArgs {
-    /// Service name: bridge | zkteco | hrms
+    /// Instance name, for example: bridge | zkteco | hrms | dev1
     pub service: String,
     /// Number of trailing lines to print.
     #[arg(short = 'n', long, default_value = "50")]
@@ -124,6 +133,8 @@ pub struct AtBridgeArgs {
 pub enum AtBridgeCommand {
     /// Run the bridge detached (same as `fbsy run bridge`).
     Run {
+        #[arg(long)]
+        name: Option<String>,
         #[arg(long)]
         config: Option<PathBuf>,
         #[arg(long)]
@@ -234,6 +245,8 @@ pub struct ZktecoArgs {
 pub enum ZktecoCommand {
     /// Start the mock device server detached.
     Run {
+        #[arg(long)]
+        name: Option<String>,
         #[arg(short = 'p', long, default_value = "4370")]
         port: u16,
         #[arg(long, default_value = "5")]
@@ -251,6 +264,8 @@ pub struct HrmsArgs {
 pub enum HrmsCommand {
     /// Start the mock HRMS server detached.
     Run {
+        #[arg(long)]
+        name: Option<String>,
         #[arg(short = 'p', long, default_value = "8800")]
         port: u16,
     },
@@ -260,7 +275,7 @@ pub enum HrmsCommand {
 
 #[derive(Debug, Args)]
 pub struct ServiceRunArgs {
-    /// Service name: bridge | zkteco | hrms
+    /// Service kind: bridge | zkteco | hrms
     pub service: String,
     /// Remaining service-specific flags, parsed by the service itself.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

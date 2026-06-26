@@ -158,13 +158,14 @@ Use `assert_cmd` later for CLI behavior.
 
 Test:
 
-- `fingerbridge help`
-- `fingerbridge doctor`
-- `fingerbridge config validate`
-- `fingerbridge config show`
-- `fingerbridge once`
-- compatibility aliases like `--once` and `--setup`
-- `--interval` clamps to at least `5`
+- `fbsy --help`
+- `fbsy show`
+- `fbsy bridge doctor`
+- `fbsy bridge config validate`
+- `fbsy bridge config show`
+- `fbsy bridge sync --once`
+- compatibility aliases like `fbsy at-bridge run`
+- sync intervals clamp to at least `5`
 - success and failure exit codes
 
 Example future command:
@@ -179,8 +180,8 @@ These tests need a real ZKTeco device on the same LAN.
 
 Checklist:
 
-1. `fingerbridge devices test CODE` connects.
-2. `fingerbridge once --device CODE` pulls attendance.
+1. `fbsy bridge devices test CODE` connects.
+2. `fbsy bridge sync --device CODE` pulls attendance.
 3. HRMS receives events.
 4. Failed HRMS upload does not clear attendance.
 5. Successful HRMS upload clears attendance only when enabled.
