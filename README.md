@@ -10,6 +10,8 @@ GATE-02  ─┼─TCP 4370─▶  fbsy at-bridge (office machine)  ─HTTPS JSON
 FLOOR-3  ─┘
 ```
 
+> **New here?** The [User Guide](docs/USER_GUIDE.md) is a complete first-user manual — install, every command, and how each piece works technically.
+
 ---
 
 ## Install
@@ -308,6 +310,7 @@ Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODE
 
 | Document | What it covers |
 |---|---|
+| [USER_GUIDE.md](docs/USER_GUIDE.md) | Full first-user manual: install, every command, and how each piece works technically |
 | [INSTALL_FLOW.md](docs/INSTALL_FLOW.md) | End-to-end install → setup → run → dashboard lifecycle |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer diagram, module responsibilities |
 | [CLI.md](docs/CLI.md) | All commands, flags, and examples |
