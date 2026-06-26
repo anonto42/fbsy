@@ -267,7 +267,7 @@ fn draw_title(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
-    let header = Row::new(["SERVICE", "STATUS", "PID", "PORT", "UPTIME", "DESCRIPTION"])
+    let header = Row::new(["SERVICE", "STATUS", "PID", "PORT", "UPTIME", "ADDRESS"])
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     let body: Vec<Row> = rows
@@ -284,13 +284,21 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
                 .uptime_secs
                 .map(service::format_uptime_secs)
                 .unwrap_or_else(|| "-".into());
+            // Show the live address when running; the static description otherwise.
+            let address = if r.running {
+                r.url
+                    .clone()
+                    .unwrap_or_else(|| r.kind.description().to_string())
+            } else {
+                r.kind.description().to_string()
+            };
             Row::new(vec![
                 Cell::from(r.kind.name()),
                 Cell::from(status_text).style(Style::default().fg(status_color)),
                 Cell::from(pid),
                 Cell::from(port),
                 Cell::from(uptime),
-                Cell::from(r.kind.description()),
+                Cell::from(address),
             ])
         })
         .collect();
@@ -301,7 +309,7 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
         Constraint::Length(8),
         Constraint::Length(6),
         Constraint::Length(8),
-        Constraint::Min(18),
+        Constraint::Min(22),
     ];
     let table = Table::new(body, widths)
         .header(header)

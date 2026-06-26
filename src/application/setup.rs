@@ -53,14 +53,17 @@ pub fn run_at(path: PathBuf) -> Result<()> {
     println!("{}", style("Next steps:").underlined().bold());
     println!(
         "  1. Validate config: {}",
-        style("./fbsy config validate").cyan()
+        style("fbsy bridge config validate").cyan()
     );
-    println!("  2. Run diagnostics: {}", style("./fbsy doctor").cyan());
     println!(
-        "  3. Run once:        {}",
-        style("./fbsy once --device <DEVICE_CODE>").cyan()
+        "  2. Run diagnostics: {}",
+        style("fbsy bridge doctor").cyan()
     );
-    println!("  4. Start service:   {}", style("./fbsy serve").cyan());
+    println!(
+        "  3. Sync once:       {}",
+        style("fbsy bridge sync --device <DEVICE_CODE>").cyan()
+    );
+    println!("  4. Start service:   {}", style("fbsy run bridge").cyan());
     Ok(())
 }
 

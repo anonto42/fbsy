@@ -19,6 +19,9 @@ pub struct RegistryEntry {
     pub pid: u32,
     /// Port the service listens on, if known.
     pub port: Option<u16>,
+    /// Human-facing address/URL where the service can be reached.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Flags the service was started with (for inspection / restart).
     pub args: Vec<String>,
     /// RFC 3339 UTC timestamp when the service was started.

@@ -123,6 +123,7 @@ pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> R
         service: kind.name().to_string(),
         pid,
         port,
+        url: service_url(kind, port),
         args: args.to_vec(),
         started_at: Utc::now().to_rfc3339(),
         exe: std::env::current_exe()
@@ -130,6 +131,18 @@ pub fn spawn_service(kind: ServiceKind, port: Option<u16>, args: &[String]) -> R
             .unwrap_or_default(),
     })?;
     Ok(pid)
+}
+
+/// The address/URL where a running service can be reached.
+///   zkteco — `127.0.0.1:PORT`        (TCP; use as the device IP in setup)
+///   hrms   — `http://127.0.0.1:PORT` (HTTP; webhook is at `/webhook`)
+///   bridge — `http://127.0.0.1:PORT` (the bridge's local HTTP API)
+fn service_url(kind: ServiceKind, port: Option<u16>) -> Option<String> {
+    let port = port?;
+    Some(match kind {
+        ServiceKind::Zkteco => format!("127.0.0.1:{port}"),
+        ServiceKind::Hrms | ServiceKind::AtBridge => format!("http://127.0.0.1:{port}"),
+    })
 }
 
 /// Start a service with its default flags (used by the TUI dashboard). For
@@ -205,6 +218,7 @@ pub struct ServiceStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub port: Option<u16>,
+    pub url: Option<String>,
     pub uptime_secs: Option<i64>,
 }
 
@@ -216,11 +230,15 @@ pub fn snapshot() -> Vec<ServiceStatus> {
         let entry = registry::read(kind.name()).ok().flatten();
         match entry {
             Some(e) if process::is_alive(e.pid, Some(&e.exe)) => {
+                // Older registry files may predate the `url` field — fall back
+                // to deriving it from the recorded port.
+                let url = e.url.clone().or_else(|| service_url(kind, e.port));
                 out.push(ServiceStatus {
                     kind,
                     running: true,
                     pid: Some(e.pid),
                     port: e.port,
+                    url,
                     uptime_secs: uptime_secs(&e.started_at),
                 });
             }
@@ -232,6 +250,7 @@ pub fn snapshot() -> Vec<ServiceStatus> {
                     running: false,
                     pid: None,
                     port: None,
+                    url: None,
                     uptime_secs: None,
                 });
             }
@@ -240,6 +259,7 @@ pub fn snapshot() -> Vec<ServiceStatus> {
                 running: false,
                 pid: None,
                 port: None,
+                url: None,
                 uptime_secs: None,
             }),
         }
@@ -281,12 +301,13 @@ pub fn show() -> Result<()> {
     }
 
     println!(
-        "{:<12} {:<9} {:<8} {:<6} {}",
+        "{:<10} {:<9} {:<8} {:<7} {:<8} {}",
         style("SERVICE").bold(),
         style("STATUS").bold(),
         style("PID").bold(),
+        style("UPTIME").bold(),
         style("PORT").bold(),
-        style("UPTIME").bold()
+        style("ADDRESS").bold()
     );
     for row in rows {
         if !row.running {
@@ -302,13 +323,15 @@ pub fn show() -> Result<()> {
             .uptime_secs
             .map(format_uptime_secs)
             .unwrap_or_else(|| "-".into());
+        let address = row.url.clone().unwrap_or_else(|| "-".into());
         println!(
-            "{:<12} {:<9} {:<8} {:<6} {}",
+            "{:<10} {:<9} {:<8} {:<7} {:<8} {}",
             row.kind.name(),
             status_cell,
             pid,
+            uptime,
             port,
-            uptime
+            style(address).cyan()
         );
     }
     Ok(())
@@ -338,11 +361,18 @@ pub fn status(service: &str) -> Result<()> {
 
     match registry::read(kind.name())? {
         Some(entry) if process::is_alive(entry.pid, Some(&entry.exe)) => {
+            let url = entry.url.clone().or_else(|| service_url(kind, entry.port));
             println!("Service: {}", style(kind.name()).cyan().bold());
             println!("  Status:  {}", style("running").green());
             println!("  PID:     {}", entry.pid);
             if let Some(port) = entry.port {
                 println!("  Port:    {port}");
+            }
+            if let Some(url) = &url {
+                println!("  Address: {}", style(url).cyan());
+            }
+            for hint in address_hints(kind, url.as_deref()) {
+                println!("           {hint}");
             }
             println!("  Uptime:  {}", format_uptime(&entry.started_at));
             println!("  Logs:    {}", log.display());
@@ -354,6 +384,26 @@ pub fn status(service: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Service-specific hints about how to use a running service's address.
+fn address_hints(kind: ServiceKind, url: Option<&str>) -> Vec<String> {
+    let Some(url) = url else {
+        return Vec::new();
+    };
+    match kind {
+        ServiceKind::Zkteco => vec![format!(
+            "(use this host/port as a device in `fbsy bridge config setup`)"
+        )],
+        ServiceKind::Hrms => vec![
+            format!("POST {url}/webhook   ← attendance events"),
+            format!("GET  {url}/events    ← inspect received events"),
+        ],
+        ServiceKind::AtBridge => vec![
+            format!("GET  {url}/health    ← status + last sync result"),
+            format!("POST {url}/sync      ← trigger a sync"),
+        ],
+    }
 }
 
 /// Print the last `lines` of a service's log file (optionally follow).
