@@ -34,10 +34,14 @@ const MACHINE_PREPARE_DATA_2: u16 = 32130;
 const USHRT_MAX: u16 = 65535;
 
 const CMD_GET_FREE_SIZES: u16 = 50;
+const CMD_DB_RRQ: u8 = 7; // read templates/users buffer
+const CMD_USERTEMP_RRQ: u8 = 9; // read users buffer
 const CMD_ATTLOG_RRQ: u8 = 13;
 const CMD_CLEAR_ATTLOG: u16 = 15;
+const CMD_SAVE_USERTEMPS: u16 = 110; // (undocumented) save user + templates
 const CMD_CONNECT: u16 = 1000;
 const CMD_EXIT: u16 = 1001;
+const CMD_REFRESHDATA: u16 = 1013;
 const CMD_AUTH: u16 = 1102;
 const CMD_PREPARE_DATA: u16 = 1500;
 const CMD_DATA: u16 = 1501;
@@ -47,8 +51,12 @@ const CMD_READ_BUFFER: u16 = 1504;
 const CMD_ACK_OK: u16 = 2000;
 const CMD_ACK_UNAUTH: u16 = 2005;
 
+const FCT_FINGERTMP: i32 = 2; // template function code
+const FCT_USER: i32 = 5; // user function code
+
 const MAX_CHUNK_TCP: usize = 0xff_c0; // 65 472 — pyzk TCP value
 const MAX_CHUNK_UDP: usize = 16 * 1024; // 16 384 — pyzk UDP value
+const MAX_CHUNK_SEND: usize = 1024; // pyzk _send_with_buffer chunk
 const UDP_BUF: usize = 65_536; // max UDP datagram
 
 // ── Connector ────────────────────────────────────────────────────────────────
@@ -163,19 +171,60 @@ impl DeviceClient for ZktecoClient {
     }
 
     fn get_templates(&mut self) -> Result<Vec<FingerTemplate>, DeviceError> {
-        Err(DeviceError::Message(
-            "template retrieval is not yet implemented".to_string(),
-        ))
+        let (users_count, fingers_count, _) = self.read_sizes();
+        if fingers_count == 0 {
+            return Ok(Vec::new());
+        }
+        // Map uid -> (user_id, name) so templates can be joined with their user.
+        let user_map: std::collections::HashMap<u32, (String, String)> = self
+            .get_users(users_count)?
+            .into_iter()
+            .map(|u| (u.uid, (u.user_id, u.name)))
+            .collect();
+
+        let raw = self.read_with_buffer(CMD_DB_RRQ, FCT_FINGERTMP, 0)?;
+        decode_templates(&raw, &user_map)
     }
 
     fn push_user_template(
         &mut self,
-        _user: &DeviceUser,
-        _finger: &FingerTemplate,
+        user: &DeviceUser,
+        finger: &FingerTemplate,
     ) -> Result<(), DeviceError> {
-        Err(DeviceError::Message(
-            "push user/template is not yet implemented".to_string(),
-        ))
+        // Build the HR_save_usertemplates buffer: head + user + table + template.
+        // TCP devices use the 73-byte user packet (pyzk zk8 default).
+        let upack = repack_user_73(user);
+        let fpack = repack_finger_only(&finger.template);
+        let table = repack_table_entry(user.uid, finger.fid, 0);
+
+        let mut head = Vec::with_capacity(12);
+        head.extend_from_slice(&(upack.len() as u32).to_le_bytes());
+        head.extend_from_slice(&(table.len() as u32).to_le_bytes());
+        head.extend_from_slice(&(fpack.len() as u32).to_le_bytes());
+
+        let mut buffer = head;
+        buffer.extend_from_slice(&upack);
+        buffer.extend_from_slice(&table);
+        buffer.extend_from_slice(&fpack);
+
+        self.send_with_buffer(&buffer)?;
+
+        // CMD_SAVE_USERTEMPS with command_string pack('<IHH', 12, 0, 8).
+        let mut cmd_string = Vec::with_capacity(8);
+        cmd_string.extend_from_slice(&12u32.to_le_bytes());
+        cmd_string.extend_from_slice(&0u16.to_le_bytes());
+        cmd_string.extend_from_slice(&8u16.to_le_bytes());
+        let resp = self.send_command(CMD_SAVE_USERTEMPS, &cmd_string)?;
+        if resp.command != CMD_ACK_OK {
+            return Err(DeviceError::Message(format!(
+                "save user/template returned command {}",
+                resp.command
+            )));
+        }
+
+        // Tell the device to refresh its internal data.
+        let _ = self.send_command(CMD_REFRESHDATA, &[]);
+        Ok(())
     }
 
     fn disconnect(&mut self) {
@@ -185,14 +234,70 @@ impl DeviceClient for ZktecoClient {
 
 impl ZktecoClient {
     fn get_record_count(&mut self) -> Result<usize, DeviceError> {
-        let resp = self.send_command(CMD_GET_FREE_SIZES, &[])?;
+        let (_, _, records) = self.read_sizes();
+        Ok(records)
+    }
+
+    /// Returns (users, fingers, records) counts from CMD_GET_FREE_SIZES.
+    /// The response is 20 × i32 LE: field[4]=users, field[6]=fingers,
+    /// field[8]=records (pyzk read_sizes).
+    fn read_sizes(&mut self) -> (usize, usize, usize) {
+        let resp = match self.send_command(CMD_GET_FREE_SIZES, &[]) {
+            Ok(r) => r,
+            Err(_) => return (0, 0, 0),
+        };
         if resp.command != CMD_ACK_OK || resp.data.len() < 80 {
-            return Ok(0);
+            return (0, 0, 0);
         }
-        // 20 × i32 LE; field [8] = attendance record count.
-        let count =
-            i32::from_le_bytes([resp.data[32], resp.data[33], resp.data[34], resp.data[35]]);
-        Ok(count.max(0) as usize)
+        let field = |i: usize| -> usize {
+            let o = i * 4;
+            i32::from_le_bytes([
+                resp.data[o],
+                resp.data[o + 1],
+                resp.data[o + 2],
+                resp.data[o + 3],
+            ])
+            .max(0) as usize
+        };
+        (field(4), field(6), field(8))
+    }
+
+    /// Read the user table and decode it into uid/user_id/name records.
+    fn get_users(&mut self, users_count: usize) -> Result<Vec<DeviceUser>, DeviceError> {
+        if users_count == 0 {
+            return Ok(Vec::new());
+        }
+        let data = self.read_with_buffer(CMD_USERTEMP_RRQ, FCT_USER, 0)?;
+        decode_users(&data, users_count)
+    }
+
+    /// Send a large buffer to the device (pyzk _send_with_buffer): free the
+    /// device buffer, declare the size, then stream it in 1 KB chunks.
+    fn send_with_buffer(&mut self, buffer: &[u8]) -> Result<(), DeviceError> {
+        let _ = self.send_command(CMD_FREE_DATA, &[]);
+
+        let size = buffer.len();
+        let resp = self.send_command(CMD_PREPARE_DATA, &(size as u32).to_le_bytes())?;
+        if resp.command != CMD_ACK_OK && resp.command != CMD_PREPARE_DATA {
+            return Err(DeviceError::Message(format!(
+                "prepare data returned command {}",
+                resp.command
+            )));
+        }
+
+        let mut start = 0;
+        while start < size {
+            let end = (start + MAX_CHUNK_SEND).min(size);
+            let chunk = self.send_command(CMD_DATA, &buffer[start..end])?;
+            if chunk.command != CMD_ACK_OK {
+                return Err(DeviceError::Message(format!(
+                    "data chunk returned command {}",
+                    chunk.command
+                )));
+            }
+            start = end;
+        }
+        Ok(())
     }
 
     fn read_with_buffer(
@@ -574,4 +679,139 @@ fn decode_timestamp(value: u32) -> String {
     let month = (t % 12) + 1;
     let year = (t / 12) + 2000;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+00:00")
+}
+
+// ── User & template decoding (pyzk get_users / get_templates) ──────────────────
+
+/// Decode the user table. Layout: 4-byte total size header, then fixed-size user
+/// records (28 bytes for zk6, 72 bytes for zk8) chosen by total_size / count.
+fn decode_users(payload: &[u8], users_count: usize) -> Result<Vec<DeviceUser>, DeviceError> {
+    if payload.len() < 4 {
+        return Ok(Vec::new());
+    }
+    let total = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    let body = &payload[4..];
+    if total == 0 || body.is_empty() {
+        return Ok(Vec::new());
+    }
+    let packet_size = total.checked_div(users_count).unwrap_or(72);
+    let size = if packet_size == 28 { 28 } else { 72 };
+
+    let mut out = Vec::new();
+    for rec in body.chunks(size) {
+        if rec.len() < size {
+            break;
+        }
+        let uid = u16::from_le_bytes([rec[0], rec[1]]) as u32;
+        let (name, user_id) = if size == 28 {
+            // <HB5s8sIxBhI: name = [8..16], user_id = u32 at [24..28]
+            let name = cstr(&rec[8..16]);
+            let user_id = u32::from_le_bytes([rec[24], rec[25], rec[26], rec[27]]).to_string();
+            (name, user_id)
+        } else {
+            // <HB8s24sIx7sx24s: name = [11..35], user_id = [48..72]
+            (cstr(&rec[11..35]), cstr(&rec[48..72]))
+        };
+        let user_id = if user_id.is_empty() {
+            uid.to_string()
+        } else {
+            user_id
+        };
+        out.push(DeviceUser { uid, user_id, name });
+    }
+    Ok(out)
+}
+
+/// Decode the template table. Layout: 4-byte total size header, then variable
+/// records: size(u16) uid(u16) fid(i8) valid(i8) template[size-6].
+fn decode_templates(
+    payload: &[u8],
+    users: &std::collections::HashMap<u32, (String, String)>,
+) -> Result<Vec<FingerTemplate>, DeviceError> {
+    if payload.len() < 4 {
+        return Ok(Vec::new());
+    }
+    let mut total = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    let mut data = &payload[4..];
+
+    let mut out = Vec::new();
+    while total >= 6 && data.len() >= 6 {
+        let size = u16::from_le_bytes([data[0], data[1]]) as usize;
+        if size < 6 || size > data.len() {
+            break;
+        }
+        let uid = u16::from_le_bytes([data[2], data[3]]) as u32;
+        let fid = data[4];
+        let template = data[6..size].to_vec();
+
+        let (user_id, name) = users
+            .get(&uid)
+            .cloned()
+            .unwrap_or_else(|| (uid.to_string(), String::new()));
+
+        out.push(FingerTemplate {
+            uid,
+            fid,
+            user_id,
+            name,
+            template,
+        });
+
+        data = &data[size..];
+        total = total.saturating_sub(size);
+    }
+    Ok(out)
+}
+
+// ── User & template encoding (pyzk repack for save_user_template) ──────────────
+
+/// pyzk User.repack73 (zk8, 73 bytes):
+/// <BHB8s24sIB7sx24s : 2, uid, privilege=0, password="", name, card=0, 1,
+///                     group_id="0", pad, user_id
+fn repack_user_73(user: &DeviceUser) -> Vec<u8> {
+    let mut b = Vec::with_capacity(73);
+    b.push(2);
+    b.extend_from_slice(&(user.uid as u16).to_le_bytes());
+    b.push(0); // privilege
+    b.extend_from_slice(&fixed_bytes("", 8)); // password
+    b.extend_from_slice(&fixed_bytes(&user.name, 24));
+    b.extend_from_slice(&0u32.to_le_bytes()); // card
+    b.push(1);
+    b.extend_from_slice(&fixed_bytes("0", 7)); // group_id
+    b.push(0); // pad
+    b.extend_from_slice(&fixed_bytes(&user.user_id, 24));
+    b
+}
+
+/// pyzk Finger.repack_only: <H%is : size, template
+fn repack_finger_only(template: &[u8]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(2 + template.len());
+    b.extend_from_slice(&(template.len() as u16).to_le_bytes());
+    b.extend_from_slice(template);
+    b
+}
+
+/// pyzk table entry: <bHbI : 2, uid, 0x10 + fid, tstart
+fn repack_table_entry(uid: u32, fid: u8, tstart: u32) -> Vec<u8> {
+    let mut b = Vec::with_capacity(8);
+    b.push(2);
+    b.extend_from_slice(&(uid as u16).to_le_bytes());
+    b.push(0x10u8.wrapping_add(fid));
+    b.extend_from_slice(&tstart.to_le_bytes());
+    b
+}
+
+/// Encode a string into a fixed-width, NUL-padded byte field.
+fn fixed_bytes(s: &str, width: usize) -> Vec<u8> {
+    let mut b = vec![0u8; width];
+    let bytes = s.as_bytes();
+    let n = bytes.len().min(width);
+    b[..n].copy_from_slice(&bytes[..n]);
+    b
+}
+
+/// Decode a NUL-terminated byte field into a String (lossy).
+fn cstr(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
 }

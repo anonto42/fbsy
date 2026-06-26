@@ -18,8 +18,9 @@ const USHRT_MAX: u16 = 65535;
 const CMD_GET_FREE_SIZES: u16 = 50;
 const CMD_CONNECT: u16 = 1000;
 const CMD_EXIT: u16 = 1001;
+const CMD_DB_RRQ: u8 = 7; // read templates buffer
+const CMD_USERTEMP_RRQ: u8 = 9; // read users buffer
 const CMD_ATTLOG_RRQ: u8 = 13;
-const CMD_USERTEMP_RRQ: u8 = 9;
 const CMD_CLEAR_ATTLOG: u16 = 15;
 const CMD_ACK_OK: u16 = 2000;
 const CMD_DATA: u16 = 1501;
@@ -120,9 +121,11 @@ fn handle_device_client(
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_GET_FREE_SIZES {
-            // Return 20 × i32. Field [8] = attendance record count.
+            // Return 20 × i32. Field [4] = users, [6] = fingers, [8] = records.
             let record_count = records.lock().unwrap().len() as i32;
             let mut fields = [0i32; 20];
+            fields[4] = 1; // one mock user
+            fields[6] = 1; // one mock fingerprint template
             fields[8] = record_count;
             let data: Vec<u8> = fields.iter().flat_map(|f| f.to_le_bytes()).collect();
             let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
@@ -151,7 +154,20 @@ fn handle_device_client(
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else if sub_cmd == CMD_USERTEMP_RRQ {
-                let payload = 0u32.to_le_bytes();
+                // One mock user (72-byte zk8 record): uid 1001, user_id "1001".
+                let user = mock_user_record(1001, "1001", "MockUser");
+                let payload = [
+                    (user.len() as u32).to_le_bytes().as_slice(),
+                    user.as_slice(),
+                ]
+                .concat();
+                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
+                stream.write_all(&reply)?;
+            } else if sub_cmd == CMD_DB_RRQ {
+                // One mock fingerprint template for uid 1001.
+                let rec = mock_template_record(1001, 0, &[0xAA, 0xBB, 0xCC, 0xDD]);
+                let payload =
+                    [(rec.len() as u32).to_le_bytes().as_slice(), rec.as_slice()].concat();
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else {
@@ -211,6 +227,40 @@ fn calc_checksum(data: &[u8]) -> u16 {
         }
     }
     !(checksum as u16)
+}
+
+/// Build a 72-byte zk8 user record (matches the bridge's `decode_users`).
+fn mock_user_record(uid: u16, user_id: &str, name: &str) -> Vec<u8> {
+    let fixed = |s: &str, n: usize| -> Vec<u8> {
+        let mut b = vec![0u8; n];
+        let bytes = s.as_bytes();
+        let k = bytes.len().min(n);
+        b[..k].copy_from_slice(&bytes[..k]);
+        b
+    };
+    let mut b = Vec::with_capacity(72);
+    b.extend(uid.to_le_bytes()); // uid (H)
+    b.push(0); // privilege (B)
+    b.extend(fixed("", 8)); // password (8s)
+    b.extend(fixed(name, 24)); // name (24s)
+    b.extend(0u32.to_le_bytes()); // card (I)
+    b.push(0); // pad (x)
+    b.extend(fixed("0", 7)); // group (7s)
+    b.push(0); // pad (x)
+    b.extend(fixed(user_id, 24)); // user_id (24s)
+    b
+}
+
+/// Build a template record: size(H) uid(H) fid(b) valid(b) template[size-6].
+fn mock_template_record(uid: u16, fid: u8, template: &[u8]) -> Vec<u8> {
+    let size = (template.len() + 6) as u16;
+    let mut b = Vec::with_capacity(size as usize);
+    b.extend(size.to_le_bytes());
+    b.extend(uid.to_le_bytes());
+    b.push(fid);
+    b.push(1); // valid
+    b.extend_from_slice(template);
+    b
 }
 
 /// Run a mock HRMS webhook API server.
