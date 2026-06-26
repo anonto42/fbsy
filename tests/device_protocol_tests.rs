@@ -69,6 +69,28 @@ fn real_connector_pulls_templates_joined_with_users() {
 }
 
 #[test]
+fn real_connector_reads_device_info_from_mock() {
+    let port = 14974;
+    start_mock_device(port);
+    let mut client = ZktecoTcpConnector
+        .connect(&device_cfg(port))
+        .expect("connect");
+    let info = client.device_info().expect("device info");
+    let users = client.get_users().expect("users");
+    client.disconnect();
+
+    assert_eq!(info.serial, "MOCK-SN-0001");
+    assert_eq!(info.firmware, "MockFW 6.60");
+    assert_eq!(info.platform, "MOCK_PLATFORM");
+    assert_eq!(info.name, "MockDevice");
+    assert_eq!(info.users, 1);
+    assert_eq!(info.fingers, 1);
+    assert_eq!(info.records, 3); // mock seeds 3 attendance records
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].user_id, "1001");
+}
+
+#[test]
 fn real_connector_pushes_user_template_to_mock() {
     let port = 14973;
     start_mock_device(port);

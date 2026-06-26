@@ -82,6 +82,78 @@ pub fn device_test(config: Option<PathBuf>, code: &str) -> Result<()> {
     }
 }
 
+/// Connect to one device and print its live identity + storage data.
+pub fn device_info(config: Option<PathBuf>, code: &str, with_users: bool) -> Result<()> {
+    let cfg = load_config(config.unwrap_or_else(default_config_path))?;
+    let device = find_device(&cfg, code)?;
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("{spinner:.green} {msg}")?,
+    );
+    pb.set_message(format!(
+        "Reading data from {} ({}:{})...",
+        style(code).cyan().bold(),
+        device.device_ip,
+        device.device_port
+    ));
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let result = (|| {
+        let mut client = ZktecoTcpConnector.connect(device)?;
+        let info = client.device_info()?;
+        let users = if with_users {
+            client.get_users().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        client.disconnect();
+        Ok::<_, crate::ports::device::DeviceError>((info, users))
+    })();
+    pb.finish_and_clear();
+
+    let (info, users) = match result {
+        Ok(v) => v,
+        Err(err) => bail!(
+            "{} Could not read device {}: {}",
+            style("✘").red().bold(),
+            style(code).cyan().bold(),
+            style(err).red()
+        ),
+    };
+
+    let field = |label: &str, value: &str| {
+        let shown = if value.is_empty() { "-" } else { value };
+        println!("  {:<12} {}", format!("{label}:"), shown);
+    };
+    println!("Device: {}", style(code).cyan().bold());
+    field(
+        "IP",
+        &format!("{}:{}", device.device_ip, device.device_port),
+    );
+    field("Serial", &info.serial);
+    field("Firmware", &info.firmware);
+    field("Platform", &info.platform);
+    field("Name", &info.name);
+    println!(
+        "  {:<12} {} users · {} fingerprints · {} attendance records",
+        "Storage:",
+        style(info.users).yellow(),
+        style(info.fingers).yellow(),
+        style(info.records).yellow()
+    );
+
+    if with_users {
+        println!("\n  Users ({}):", users.len());
+        for u in &users {
+            println!("    uid {:<6} id {:<10} {}", u.uid, u.user_id, u.name);
+        }
+    }
+    Ok(())
+}
+
 /// Send an empty webhook event list for one configured device.
 pub fn webhook_test(config: Option<PathBuf>, code: &str) -> Result<()> {
     let cfg = load_config(config.unwrap_or_else(default_config_path))?;

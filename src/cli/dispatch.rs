@@ -84,6 +84,9 @@ fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
         AtBridgeCommand::Devices { command } => match command {
             DevicesCommand::List { path } => application::config::devices_list(path),
             DevicesCommand::Test { code, path } => application::doctor::device_test(path, &code),
+            DevicesCommand::Info { code, users, path } => {
+                application::doctor::device_info(path, &code, users)
+            }
         },
         AtBridgeCommand::Webhook { command } => match command {
             WebhookCommand::Test { code, path } => application::doctor::webhook_test(path, &code),

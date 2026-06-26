@@ -16,8 +16,10 @@ const MACHINE_PREPARE_DATA_2: u16 = 32130;
 const USHRT_MAX: u16 = 65535;
 
 const CMD_GET_FREE_SIZES: u16 = 50;
+const CMD_OPTIONS_RRQ: u16 = 11;
 const CMD_CONNECT: u16 = 1000;
 const CMD_EXIT: u16 = 1001;
+const CMD_GET_VERSION: u16 = 1100;
 const CMD_DB_RRQ: u8 = 7; // read templates buffer
 const CMD_USERTEMP_RRQ: u8 = 9; // read users buffer
 const CMD_ATTLOG_RRQ: u8 = 13;
@@ -129,6 +131,26 @@ fn handle_device_client(
             fields[8] = record_count;
             let data: Vec<u8> = fields.iter().flat_map(|f| f.to_le_bytes()).collect();
             let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
+            stream.write_all(&reply)?;
+        } else if cmd == CMD_GET_VERSION {
+            let reply = make_tcp_packet(CMD_ACK_OK, b"MockFW 6.60\0", session_id, reply_id);
+            stream.write_all(&reply)?;
+        } else if cmd == CMD_OPTIONS_RRQ {
+            // cmd_data is the requested option name, e.g. "~SerialNumber\0".
+            let name = cmd_data
+                .iter()
+                .position(|&b| b == 0)
+                .map(|end| &cmd_data[..end])
+                .unwrap_or(cmd_data);
+            let name = String::from_utf8_lossy(name);
+            let value = match name.as_ref() {
+                "~SerialNumber" => "MOCK-SN-0001",
+                "~Platform" => "MOCK_PLATFORM",
+                "~DeviceName" => "MockDevice",
+                _ => "",
+            };
+            let body = format!("{name}={value}\0");
+            let reply = make_tcp_packet(CMD_ACK_OK, body.as_bytes(), session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_EXIT {
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);

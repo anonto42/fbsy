@@ -19,6 +19,21 @@ pub enum DeviceError {
     Message(String),
 }
 
+/// Identity and storage data read live from a device.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceInfo {
+    pub serial: String,
+    pub firmware: String,
+    pub platform: String,
+    pub name: String,
+    /// Number of enrolled users.
+    pub users: usize,
+    /// Number of stored fingerprint templates.
+    pub fingers: usize,
+    /// Number of attendance records currently on the device.
+    pub records: usize,
+}
+
 /// Active connection to a ZKTeco-like attendance device.
 pub trait DeviceClient: Send {
     /// Pull raw attendance records from the device.
@@ -33,6 +48,14 @@ pub trait DeviceClient: Send {
         user: &DeviceUser,
         finger: &FingerTemplate,
     ) -> Result<(), DeviceError>;
+    /// Read identity + storage info from the device (serial, firmware, counts).
+    fn device_info(&mut self) -> Result<DeviceInfo, DeviceError> {
+        Err(DeviceError::NotImplemented)
+    }
+    /// List enrolled users (uid / user_id / name).
+    fn get_users(&mut self) -> Result<Vec<DeviceUser>, DeviceError> {
+        Err(DeviceError::NotImplemented)
+    }
     /// Close the device connection.
     fn disconnect(&mut self);
 }

@@ -201,6 +201,15 @@ pub enum DevicesCommand {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Read live data from a device (serial, firmware, user/finger/record counts).
+    Info {
+        code: String,
+        /// Also list enrolled users (uid / id / name).
+        #[arg(long)]
+        users: bool,
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -24,7 +24,7 @@ use std::{
 use crate::{
     config::BridgeDeviceConfig,
     domain::{DeviceUser, FingerTemplate, RawAttendance},
-    ports::device::{DeviceClient, DeviceConnector, DeviceError},
+    ports::device::{DeviceClient, DeviceConnector, DeviceError, DeviceInfo},
 };
 
 // ── Protocol constants ────────────────────────────────────────────────────────
@@ -34,6 +34,8 @@ const MACHINE_PREPARE_DATA_2: u16 = 32130;
 const USHRT_MAX: u16 = 65535;
 
 const CMD_GET_FREE_SIZES: u16 = 50;
+const CMD_OPTIONS_RRQ: u16 = 11; // read a device option string
+const CMD_GET_VERSION: u16 = 1100; // firmware version
 const CMD_DB_RRQ: u8 = 7; // read templates/users buffer
 const CMD_USERTEMP_RRQ: u8 = 9; // read users buffer
 const CMD_ATTLOG_RRQ: u8 = 13;
@@ -177,7 +179,7 @@ impl DeviceClient for ZktecoClient {
         }
         // Map uid -> (user_id, name) so templates can be joined with their user.
         let user_map: std::collections::HashMap<u32, (String, String)> = self
-            .get_users(users_count)?
+            .get_users_inner(users_count)?
             .into_iter()
             .map(|u| (u.uid, (u.user_id, u.name)))
             .collect();
@@ -227,6 +229,24 @@ impl DeviceClient for ZktecoClient {
         Ok(())
     }
 
+    fn device_info(&mut self) -> Result<DeviceInfo, DeviceError> {
+        let (users, fingers, records) = self.read_sizes();
+        Ok(DeviceInfo {
+            serial: self.read_option("~SerialNumber").unwrap_or_default(),
+            firmware: self.read_firmware().unwrap_or_default(),
+            platform: self.read_option("~Platform").unwrap_or_default(),
+            name: self.read_option("~DeviceName").unwrap_or_default(),
+            users,
+            fingers,
+            records,
+        })
+    }
+
+    fn get_users(&mut self) -> Result<Vec<DeviceUser>, DeviceError> {
+        let (users, ..) = self.read_sizes();
+        self.get_users_inner(users)
+    }
+
     fn disconnect(&mut self) {
         let _ = self.send_command(CMD_EXIT, &[]);
     }
@@ -263,12 +283,32 @@ impl ZktecoClient {
     }
 
     /// Read the user table and decode it into uid/user_id/name records.
-    fn get_users(&mut self, users_count: usize) -> Result<Vec<DeviceUser>, DeviceError> {
+    fn get_users_inner(&mut self, users_count: usize) -> Result<Vec<DeviceUser>, DeviceError> {
         if users_count == 0 {
             return Ok(Vec::new());
         }
         let data = self.read_with_buffer(CMD_USERTEMP_RRQ, FCT_USER, 0)?;
         decode_users(&data, users_count)
+    }
+
+    /// Read a `~Name`-style device option string (CMD_OPTIONS_RRQ).
+    fn read_option(&mut self, name: &str) -> Option<String> {
+        let mut data = name.as_bytes().to_vec();
+        data.push(0);
+        let resp = self.send_command(CMD_OPTIONS_RRQ, &data).ok()?;
+        if resp.command != CMD_ACK_OK {
+            return None;
+        }
+        parse_option_value(&resp.data)
+    }
+
+    /// Read the firmware version string (CMD_GET_VERSION).
+    fn read_firmware(&mut self) -> Option<String> {
+        let resp = self.send_command(CMD_GET_VERSION, &[]).ok()?;
+        if resp.command != CMD_ACK_OK {
+            return None;
+        }
+        Some(cstr(&resp.data))
     }
 
     /// Send a large buffer to the device (pyzk _send_with_buffer): free the
@@ -814,4 +854,11 @@ fn fixed_bytes(s: &str, width: usize) -> Vec<u8> {
 fn cstr(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+}
+
+/// Parse a device option reply like `~SerialNumber=ABC123\0` → `ABC123`.
+fn parse_option_value(data: &[u8]) -> Option<String> {
+    let s = cstr(data); // up to first NUL
+    let value = s.split_once('=').map(|(_, v)| v).unwrap_or(s.as_str());
+    Some(value.trim().to_string())
 }

@@ -189,6 +189,8 @@ fbsy bridge config setup             # (re)run the interactive setup wizard
 fbsy bridge doctor [--deep] [--json] # readiness; --deep tests live device + webhook
 fbsy bridge devices list             # list configured devices (no secrets)
 fbsy bridge devices test GATE-01     # test TCP connection to one device
+fbsy bridge devices info GATE-01     # read live device data (serial, firmware, counts)
+fbsy bridge devices info GATE-01 --users   # also list enrolled users
 fbsy bridge webhook test GATE-01     # send an empty batch to verify the webhook
 ```
 
