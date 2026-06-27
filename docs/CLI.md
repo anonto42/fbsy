@@ -42,7 +42,7 @@ fbsy at-bridge run
 | --- | --- |
 | `run <service>` | Start a detached named service instance |
 | `show` | List running instances |
-| `dashboard` | Monitor/control instances in a TUI |
+| `dashboard` | Monitor/control instances in a TUI; its `:` bar can run any CLI command without `fbsy` |
 | `bridge doctor` | Show local readiness and config path |
 | `bridge config setup` | Run first-time configuration wizard |
 | `bridge sync --once` | Pull and forward attendance once, then exit |

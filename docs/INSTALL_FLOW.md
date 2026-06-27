@@ -87,7 +87,7 @@ pipeline without real hardware.
 
 | Command | What it does |
 |---|---|
-| `fbsy dashboard` | Live full-screen TUI: table of service instances + log pane. Keys: ↑/↓ select, `s` start, `x` stop, `r` restart, `l` toggle logs, `a` all logs, `q` quit. |
+| `fbsy dashboard` | Live full-screen TUI: table of service instances + log pane. Keys: ↑/↓ select, `s` start, `x` stop, `r` restart, `l` logs, `a` all logs, `?` help, `q` quit. The `:` bar can run any CLI command without the `fbsy` prefix. |
 | `fbsy show` | One-shot snapshot table (script/pipe friendly). |
 | `fbsy status <instance>` | Detail for one service instance. |
 | `fbsy logs <instance> [-n N] [--follow]` | Tail an instance's log. |

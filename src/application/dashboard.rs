@@ -5,15 +5,19 @@
 //! offers two ways to drive services: single-key shortcuts and a `:command`
 //! bar that accepts the full service-management vocabulary.
 
-use std::{io::IsTerminal, time::Duration};
+use std::{
+    io::{self, IsTerminal, Write},
+    process::{Command, Stdio},
+    time::Duration,
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -32,10 +36,24 @@ enum Mode {
     Command,
 }
 
+/// Captured output of a passthrough CLI command, shown in a scrollable overlay.
+struct OutputView {
+    title: String,
+    lines: Vec<String>,
+    scroll: usize,
+}
+
 struct App {
     selected: usize,
     show_logs: bool,
     all_logs: bool,
+    show_help: bool,
+    /// Some(view) while a captured CLI command's output overlay is open.
+    output: Option<OutputView>,
+    /// Set when a `:command` must run attached to the real terminal (interactive
+    /// commands like `bridge config setup`); performed by the event loop, which
+    /// owns the terminal so it can suspend and resume the TUI.
+    pending_attach: Option<Vec<String>>,
     mode: Mode,
     input: String,
     status: String,
@@ -48,9 +66,12 @@ impl App {
             selected: 0,
             show_logs: true,
             all_logs: false,
+            show_help: false,
+            output: None,
+            pending_attach: None,
             mode: Mode::Normal,
             input: String::new(),
-            status: "ready".to_string(),
+            status: "press ? for help".to_string(),
             quit: false,
         }
     }
@@ -96,6 +117,12 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
             Mode::Command => handle_command_key(&mut app, key.code),
             Mode::Normal => handle_normal_key(&mut app, key.code, &rows),
         }
+
+        // An interactive command must own the real terminal: drop the TUI, run it
+        // attached, then re-enter the alternate screen.
+        if let Some(args) = app.pending_attach.take() {
+            run_attached(terminal, &args, &mut app.status);
+        }
     }
     Ok(())
 }
@@ -103,8 +130,28 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
 // ── Key handling ──────────────────────────────────────────────────────────────
 
 fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
+    // While a command-output overlay is open, keys scroll or close it.
+    if let Some(view) = app.output.as_mut() {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => app.output = None,
+            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
+            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
+            KeyCode::PageDown => view.scroll = view.scroll.saturating_add(10),
+            _ => {}
+        }
+        return;
+    }
+    // While the help overlay is open, any of ?, Esc, or q just closes it.
+    if app.show_help {
+        if matches!(code, KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc) {
+            app.show_help = false;
+        }
+        return;
+    }
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
+        KeyCode::Char('?') => app.show_help = true,
         KeyCode::Char(':') => {
             app.mode = Mode::Command;
             app.input.clear();
@@ -204,62 +251,289 @@ fn run_action(app: &mut App, action: Action) {
     };
 }
 
-/// Parse and run a `:command` line. Vocabulary:
-///   start <kind> · stop|restart <instance> · sync [deviceCode]
-///   logs <instance>|all · select <instance>|<kind> · help · quit
+/// Parse and run a `:command` line.
+///
+/// The dashboard keeps a few TUI-native conveniences (`select`, `logs all`,
+/// `restart`) and translates friendly aliases (`start`, `stop`, `sync`) into
+/// normal CLI commands. Everything else is passed through to this same `fbsy`
+/// binary, so the dashboard command bar can use the full CLI surface.
 fn execute_command(app: &mut App, line: &str) {
-    let mut parts = line.split_whitespace();
-    let verb = parts.next().unwrap_or("");
-    let arg = parts.next();
+    let mut args = match split_command_line(line) {
+        Ok(args) => args,
+        Err(err) => {
+            app.status = err;
+            return;
+        }
+    };
+    if args.first().is_some_and(|arg| arg == "fbsy") {
+        args.remove(0);
+    }
+    if args.is_empty() {
+        app.status = "type a command, for example: show".to_string();
+        return;
+    }
 
     let rows = dashboard_rows(service::snapshot());
-
-    match verb {
-        "start" => match arg.and_then(ServiceKind::from_name) {
-            Some(k) => run_action(app, Action::Start(k)),
-            None => app.status = "usage: start <bridge|zkteco|hrms>".to_string(),
-        },
-        "stop" => match arg {
-            Some(name) => run_action(app, Action::Stop(name.to_string())),
-            None => app.status = "usage: stop <instance>".to_string(),
-        },
-        "restart" => match arg.and_then(|name| row_by_name_or_kind(&rows, name)) {
-            Some(row) => run_action(app, Action::Restart(row.name.clone(), row.kind)),
-            None => app.status = "usage: restart <instance>".to_string(),
-        },
-        "sync" => run_action(app, Action::Sync(arg.map(str::to_string))),
-        "logs" => match arg {
-            Some("all") => {
-                app.all_logs = true;
-                app.show_logs = true;
-                app.status = "showing logs: all running instances".to_string();
-            }
-            Some(name) => match row_index_by_name_or_kind(&rows, name) {
+    match args[0].as_str() {
+        "help" | "?" => {
+            app.show_help = true;
+            return;
+        }
+        "quit" | "q" | "exit" => {
+            app.quit = true;
+            return;
+        }
+        "select" => {
+            match args
+                .get(1)
+                .and_then(|name| row_index_by_name_or_kind(&rows, name))
+            {
                 Some(index) => {
                     app.selected = index;
-                    app.all_logs = false;
-                    app.show_logs = true;
-                    app.status = format!("showing logs: {}", rows[index].name);
+                    app.status = format!("selected {}", rows[index].name);
                 }
-                None => app.status = "usage: logs <instance>|all".to_string(),
-            },
-            None => app.status = "usage: logs <instance>|all".to_string(),
-        },
-        "select" => match arg.and_then(|name| row_index_by_name_or_kind(&rows, name)) {
-            Some(index) => {
-                app.selected = index;
-                app.status = format!("selected {}", rows[index].name);
+                None => app.status = "usage: select <instance>|<kind>".to_string(),
             }
-            None => app.status = "usage: select <instance>|<kind>".to_string(),
-        },
-        "help" => {
-            app.status =
-                "commands: start <kind> · stop|restart <instance> · sync [code] · logs <name|all>"
-                    .to_string()
+            return;
         }
-        "quit" | "q" | "exit" => app.quit = true,
-        other => app.status = format!("unknown command '{other}' (try: help)"),
+        "logs" if args.get(1).is_some_and(|arg| arg == "all") => {
+            app.all_logs = true;
+            app.show_logs = true;
+            app.status = "showing logs: all running instances".to_string();
+            return;
+        }
+        "restart" => {
+            match args
+                .get(1)
+                .and_then(|name| row_by_name_or_kind(&rows, name))
+            {
+                Some(row) => run_action(app, Action::Restart(row.name.clone(), row.kind)),
+                None => app.status = "usage: restart <instance>".to_string(),
+            }
+            return;
+        }
+        "dashboard" => {
+            app.status = "already inside fbsy dashboard".to_string();
+            return;
+        }
+        _ => {}
     }
+
+    let args = expand_dashboard_alias(args);
+    if should_run_attached(&args) {
+        app.pending_attach = Some(args);
+        app.status = "leaving dashboard temporarily for an interactive command".to_string();
+    } else {
+        app.output = Some(run_captured(&args));
+        app.status = "command output opened; Esc closes it".to_string();
+    }
+}
+
+fn expand_dashboard_alias(mut args: Vec<String>) -> Vec<String> {
+    match args[0].as_str() {
+        "start" => {
+            args[0] = "run".to_string();
+            args
+        }
+        "stop" => {
+            args[0] = "close".to_string();
+            args
+        }
+        "sync" => {
+            let mut out = vec![
+                "bridge".to_string(),
+                "sync".to_string(),
+                "--once".to_string(),
+            ];
+            match args.get(1) {
+                Some(device) if !device.starts_with('-') => {
+                    out.push("--device".to_string());
+                    out.push(device.clone());
+                    out.extend(args.into_iter().skip(2));
+                }
+                Some(_) => out.extend(args.into_iter().skip(1)),
+                None => {}
+            }
+            out
+        }
+        "doctor" | "config" | "devices" | "webhook" => {
+            let mut out = vec!["bridge".to_string()];
+            out.extend(args);
+            out
+        }
+        "setup" => vec![
+            "bridge".to_string(),
+            "config".to_string(),
+            "setup".to_string(),
+        ],
+        "once" => {
+            let mut out = vec![
+                "bridge".to_string(),
+                "sync".to_string(),
+                "--once".to_string(),
+            ];
+            out.extend(args.into_iter().skip(1));
+            out
+        }
+        _ => args,
+    }
+}
+
+fn should_run_attached(args: &[String]) -> bool {
+    let has_flag = |short: &str, long: &str| args.iter().any(|arg| arg == short || arg == long);
+    match args {
+        [cmd, ..] if cmd == "install" || cmd == "uninstall" => true,
+        [cmd, rest @ ..] if cmd == "update" => {
+            !(rest.iter().any(|arg| arg == "--check")
+                || has_flag("-y", "--yes")
+                || rest.iter().any(|arg| arg == "--auto"))
+        }
+        [cmd, service, ..] if cmd == "run" && service == "bridge" => true,
+        [cmd, sub, ..] if cmd == "bridge" && sub == "run" => true,
+        [cmd, sub, leaf, ..] if cmd == "bridge" && sub == "config" && leaf == "setup" => true,
+        [cmd, ..] if cmd == "logs" && has_flag("-f", "--follow") => true,
+        _ => false,
+    }
+}
+
+fn run_captured(args: &[String]) -> OutputView {
+    let title = format!("fbsy {}", display_args(args));
+    let output = std::env::current_exe()
+        .context("locate current executable")
+        .and_then(|exe| {
+            Command::new(exe)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .context("run command")
+        });
+
+    let mut lines = Vec::new();
+    lines.push(format!("$ {title}"));
+    lines.push(String::new());
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            lines.extend(stdout.lines().map(str::to_string));
+            lines.extend(stderr.lines().map(str::to_string));
+            if lines.len() == 2 {
+                lines.push("(no output)".to_string());
+            }
+            if !output.status.success() {
+                lines.push(String::new());
+                lines.push(format!(
+                    "exit status: {}",
+                    output.status.code().map_or_else(
+                        || "terminated by signal".to_string(),
+                        |code| code.to_string()
+                    )
+                ));
+            }
+        }
+        Err(err) => lines.push(format!("failed to run command: {err}")),
+    }
+
+    OutputView {
+        title,
+        lines,
+        scroll: 0,
+    }
+}
+
+fn run_attached(
+    terminal: &mut ratatui::DefaultTerminal,
+    args: &[String],
+    status_text: &mut String,
+) {
+    ratatui::restore();
+    println!();
+    println!("$ fbsy {}", display_args(args));
+    println!();
+
+    let status = std::env::current_exe()
+        .context("locate current executable")
+        .and_then(|exe| {
+            Command::new(exe)
+                .args(args)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .context("run attached command")
+        });
+
+    match status {
+        Ok(status) if status.success() => {
+            *status_text = format!("fbsy {} completed", display_args(args));
+        }
+        Ok(status) => {
+            *status_text = format!("fbsy {} exited with {status}", display_args(args));
+        }
+        Err(err) => {
+            *status_text = format!("could not run fbsy {}: {err}", display_args(args));
+        }
+    }
+
+    println!();
+    print!("Press Enter to return to the dashboard...");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    *terminal = ratatui::init();
+}
+
+fn split_command_line(line: &str) -> std::result::Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for ch in line.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            c if c.is_whitespace() && quote.is_none() => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    if let Some(quote) = quote {
+        return Err(format!("unclosed {quote} quote"));
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Ok(words)
+}
+
+fn display_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| {
+            if arg.chars().any(char::is_whitespace) {
+                format!("{arg:?}")
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -286,6 +560,132 @@ fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
     }
     draw_palette(frame, areas[3]);
     draw_status(frame, areas[4], app);
+
+    // The help overlay floats above everything else.
+    if let Some(view) = &app.output {
+        draw_output(frame, frame.area(), view);
+    }
+    if app.show_help {
+        draw_help(frame, frame.area());
+    }
+}
+
+/// Full help: dashboard shortcuts, aliases, and the CLI passthrough model.
+fn draw_help(frame: &mut Frame, full: Rect) {
+    let area = centered_rect(84, 25, full);
+    let dim = Style::default().dim();
+    let cyan = Style::default().fg(Color::Cyan).bold();
+    let yellow = Style::default().fg(Color::Yellow).bold();
+
+    let row = |k: &str, d: &'static str| {
+        Line::from(vec![Span::styled(format!("  {k:<26}"), cyan), d.into()])
+    };
+
+    let lines = vec![
+        Line::from(vec![Span::styled("Single-key shortcuts", yellow)]),
+        row("↑/↓ or j/k", "move selection"),
+        row("s", "start selected service (default name + port)"),
+        row("x", "stop selected instance"),
+        row("r", "restart selected instance"),
+        row("y", "run a one-off sync now"),
+        row("l", "toggle the log pane"),
+        row("a", "toggle logs from ALL running instances"),
+        row("? / q", "this help / quit"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Command bar passthrough  (press : then type)",
+            yellow,
+        )]),
+        Line::from(vec![
+            "  Type any normal CLI command ".into(),
+            Span::styled("without", yellow),
+            " the `fbsy` prefix.".into(),
+        ]),
+        row("show", "same as `fbsy show`"),
+        row("bridge doctor --json", "captures command output here"),
+        row(
+            "bridge devices info CODE --users",
+            "deep diagnostics also work",
+        ),
+        row(
+            "bridge config setup",
+            "suspends TUI for the interactive wizard",
+        ),
+        Line::from(""),
+        Line::from(vec![Span::styled("Dashboard aliases", yellow)]),
+        row("start <kind> [flags]", "alias for `run <kind> [flags]`"),
+        row("stop <instance>", "alias for `close <instance>`"),
+        row("restart <instance>", "dashboard-only restart helper"),
+        row(
+            "sync [deviceCode]",
+            "alias for `bridge sync --once [--device CODE]`",
+        ),
+        row("logs all", "dashboard-only combined log view"),
+        row("select <instance>", "move the highlight"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Multiple mock devices", yellow)]),
+        Line::from(vec![
+            "  ".into(),
+            Span::styled("start zkteco --name dev1 --port 4370", cyan),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            Span::styled("start zkteco --name dev2 --port 4371", cyan),
+            "   ".into(),
+            Span::styled("← a 2nd mock device", dim),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            Span::styled("start bridge --config /path/config.json", cyan),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Esc closes output/help overlays. Interactive commands return here when done.",
+            dim,
+        )]),
+    ];
+
+    frame.render_widget(Clear, area);
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" help — commands & running multiple instances "),
+    );
+    frame.render_widget(para, area);
+}
+
+fn draw_output(frame: &mut Frame, full: Rect, view: &OutputView) {
+    let area = centered_rect(92, full.height.saturating_sub(4).max(8), full);
+    let visible = area.height.saturating_sub(2) as usize;
+    let max_scroll = view.lines.len().saturating_sub(visible);
+    let scroll = view.scroll.min(max_scroll).min(u16::MAX as usize) as u16;
+    let lines = view
+        .lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+
+    frame.render_widget(Clear, area);
+    let title = format!(" {}  ↑/↓ scroll · PgUp/PgDn · Esc close ", view.title);
+    let para = Paragraph::new(lines)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title(title));
+    frame.render_widget(para, area);
+}
+
+/// A centered rectangle `width`×`height` cells (clamped to the frame).
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 fn draw_title(frame: &mut Frame, area: Rect) {
@@ -417,13 +817,14 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
     line1.extend(key("y", "sync"));
     line1.extend(key("l", "logs"));
     line1.extend(key("a", "all logs"));
+    line1.extend(key("?", "help"));
     line1.extend(key("q", "quit"));
 
     let line2 = vec![
         Span::styled(":", Style::default().fg(Color::Yellow).bold()),
         Span::raw(" command  —  "),
         Span::styled(
-            "start <kind> · stop|restart <instance> · sync [code] · logs <name|all> · select <name>",
+            "type any CLI command without `fbsy`: show · bridge doctor --json · bridge config setup",
             Style::default().dim(),
         ),
     ];
@@ -476,4 +877,52 @@ fn row_index_by_name_or_kind(rows: &[ServiceStatus], name: &str) -> Option<usize
 
 fn row_by_name_or_kind<'a>(rows: &'a [ServiceStatus], name: &str) -> Option<&'a ServiceStatus> {
     row_index_by_name_or_kind(rows, name).and_then(|index| rows.get(index))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expand_dashboard_alias, should_run_attached, split_command_line};
+
+    #[test]
+    fn command_line_splitter_keeps_quoted_paths_together() {
+        let words =
+            split_command_line("bridge config show --path \"/tmp/my config.json\"").expect("split");
+        assert_eq!(
+            words,
+            ["bridge", "config", "show", "--path", "/tmp/my config.json"]
+        );
+    }
+
+    #[test]
+    fn command_aliases_expand_to_real_cli_commands() {
+        assert_eq!(
+            expand_dashboard_alias(vec![
+                "start".into(),
+                "zkteco".into(),
+                "--name".into(),
+                "dev1".into()
+            ]),
+            ["run", "zkteco", "--name", "dev1"]
+        );
+        assert_eq!(
+            expand_dashboard_alias(vec!["sync".into(), "GATE-01".into()]),
+            ["bridge", "sync", "--once", "--device", "GATE-01"]
+        );
+        assert_eq!(
+            expand_dashboard_alias(vec!["doctor".into(), "--json".into()]),
+            ["bridge", "doctor", "--json"]
+        );
+    }
+
+    #[test]
+    fn interactive_commands_are_attached_to_the_real_terminal() {
+        assert!(should_run_attached(&[
+            "bridge".into(),
+            "config".into(),
+            "setup".into()
+        ]));
+        assert!(should_run_attached(&["update".into()]));
+        assert!(!should_run_attached(&["update".into(), "--check".into()]));
+        assert!(!should_run_attached(&["show".into()]));
+    }
 }

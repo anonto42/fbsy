@@ -182,31 +182,60 @@ fn service_url(kind: ServiceKind, port: Option<u16>) -> Option<String> {
 /// `bridge` this requires an existing config — the wizard cannot run inside
 /// the dashboard's alternate screen.
 pub fn default_start(kind: ServiceKind) -> Result<u32> {
-    let name = kind.name();
+    start_named(kind, None, None, None)
+}
+
+/// Start an instance with optional name/port/config overrides.
+///
+/// Powers the dashboard's `:start <kind> [--name N] [--port P] [--config C]`
+/// command and named instances generally. With no overrides it behaves exactly
+/// like [`default_start`] (default name, default port, default config).
+pub fn start_named(
+    kind: ServiceKind,
+    name: Option<String>,
+    port: Option<u16>,
+    config: Option<PathBuf>,
+) -> Result<u32> {
+    let name = name.unwrap_or_else(|| kind.name().to_string());
     match kind {
-        ServiceKind::Zkteco => spawn_service(
-            kind,
-            name,
-            Some(4370),
-            &[
-                "--port".to_string(),
-                "4370".to_string(),
-                "--records".to_string(),
-                "5".to_string(),
-            ],
-        ),
-        ServiceKind::Hrms => spawn_service(
-            kind,
-            name,
-            Some(8800),
-            &["--port".to_string(), "8800".to_string()],
-        ),
+        ServiceKind::Zkteco => {
+            let port = port.unwrap_or(4370);
+            spawn_service(
+                kind,
+                &name,
+                Some(port),
+                &[
+                    "--port".to_string(),
+                    port.to_string(),
+                    "--records".to_string(),
+                    "5".to_string(),
+                ],
+            )
+        }
+        ServiceKind::Hrms => {
+            let port = port.unwrap_or(8800);
+            spawn_service(
+                kind,
+                &name,
+                Some(port),
+                &["--port".to_string(), port.to_string()],
+            )
+        }
         ServiceKind::AtBridge => {
-            if !at_bridge_configured() {
-                bail!("bridge needs setup — run `fbsy bridge config setup`");
+            let cfg_path = config.clone().unwrap_or_else(paths::default_config_path);
+            if !cfg_path.exists() {
+                bail!(
+                    "bridge needs setup — run `fbsy bridge config setup` \
+                     (or pass --config <path> to use an existing config)"
+                );
             }
-            let port = load_bridge_port(&paths::default_config_path());
-            spawn_service(kind, name, port, &[])
+            let port = port.or_else(|| load_bridge_port(&cfg_path));
+            let mut args = Vec::new();
+            if let Some(cfg) = &config {
+                args.push("--config".to_string());
+                args.push(cfg.display().to_string());
+            }
+            spawn_service(kind, &name, port, &args)
         }
     }
 }
@@ -316,12 +345,6 @@ pub fn restart_instance(name: &str) -> Result<u32> {
     stop_instance(name)?;
     std::thread::sleep(Duration::from_millis(150));
     spawn_service(kind, name, entry.port, &entry.args)
-}
-
-/// Whether the attendance bridge has a config file (the wizard can't run inside
-/// the TUI, so the dashboard checks this before offering to start `bridge`).
-pub fn at_bridge_configured() -> bool {
-    paths::default_config_path().exists()
 }
 
 // ── Management: show / close / status / logs ──────────────────────────────────

@@ -180,22 +180,38 @@ A full-screen TUI (needs a real terminal). It has **two ways to drive it**:
 | y | sync now (bridge) |
 | l | toggle the log pane (live tail of the selected service) |
 | a | toggle combined logs from all running instances |
+| ? | help overlay |
 | q / Esc | quit (restores the terminal cleanly) |
 
 **Command bar:** press `:` then type a command, Enter to run, Esc to cancel:
 | Command | Action |
 |---|---|
-| `start <bridge\|zkteco\|hrms>` | start the default instance of a service kind |
-| `stop\|restart <instance>` | control a named instance, e.g. `dev1` |
-| `sync [deviceCode]` | run a sync (all devices, or one) |
-| `logs <instance>` / `logs all` | focus one log or the combined log view |
-| `select <instance>` | move the selection |
-| `help` | list commands |
+| any CLI command without `fbsy` | `show`, `bridge doctor --json`, `bridge devices info CODE --users`, etc. |
+| `bridge config setup` | suspends the TUI for the interactive wizard, then resumes |
+| `start <kind> [flags]` | alias for `run <kind> [flags]` |
+| `stop <instance>` | alias for `close <instance>` |
+| `restart <instance>` | dashboard restart helper |
+| `sync [deviceCode]` | alias for `bridge sync --once [--device CODE]` |
+| `logs all` | combined running-instance log view |
+| `select <instance>` | move the highlight |
+| `help` / `?` | open help |
 | `quit` | exit |
 
-The available commands are always shown in the dashboard's **commands** panel. It
-auto-refreshes every 250 ms from the **same registry + liveness check** that `fbsy show`
-uses — it is not a separate implementation.
+Report-style commands are captured into a scrollable overlay. Interactive commands
+such as `bridge config setup`, `install`, and prompted `update` temporarily return to
+the real terminal, then resume the dashboard. The dashboard auto-refreshes every
+250 ms from the **same registry + liveness check** that `fbsy show` uses.
+
+Example 2-device test from inside the dashboard:
+```text
+:start zkteco --name dev1 --port 4370
+:start zkteco --name dev2 --port 4371
+:start hrms
+:bridge config setup
+:start bridge
+:sync
+:logs all
+```
 
 ### Step 7 — Logs, status, stop
 ```bash
