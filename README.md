@@ -86,10 +86,15 @@ fbsy dashboard
 # 3. Pull attendance once on demand
 fbsy bridge sync --once
 
-# 4. Inspect / stop
+# 4. Make it survive reboots / power loss (runs `fbsy enable` once; needs admin)
+fbsy enable bridge          # prints the exact `sudo …` command to run
+
+# 5. Inspect / stop
 fbsy logs bridge
 fbsy close bridge
 ```
+
+**Run on boot:** `fbsy run` starts *detached* processes that the OS kills on shutdown. To keep the bridge running across reboots and power cycles, `fbsy enable bridge` registers it with the OS init system (systemd / launchd / Windows scheduled task) so it auto-starts at boot and restarts on crash; `fbsy disable bridge` removes it. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) "Run on boot."
 
 `fbsy dashboard` is a full-screen live monitor with both single-key shortcuts (↑/↓ select, `s`/`x`/`r` start/stop/restart, `y` sync, `l` logs, `q` quit) **and** a `:command` bar for the full vocabulary. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
 

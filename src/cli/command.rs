@@ -22,6 +22,10 @@ pub enum Command {
 
     /// Start a service as a detached background process.
     Run(RunArgs),
+    /// Auto-start a service on system boot (installs an OS service; needs admin).
+    Enable(EnableArgs),
+    /// Remove a service's boot auto-start (needs admin).
+    Disable(EnableArgs),
     /// Live full-screen dashboard to monitor and control services.
     Dashboard,
     /// List all services with status, pid, port, and uptime.
@@ -46,6 +50,22 @@ pub enum Command {
     /// Internal entry point for detached service processes.
     #[command(name = "__service-run", hide = true)]
     ServiceRun(ServiceRunArgs),
+
+    /// Internal foreground entry point execed by OS boot units (self-registers).
+    #[command(name = "__service-supervised", hide = true)]
+    ServiceSupervised(ServiceRunArgs),
+}
+
+// ── enable / disable (boot auto-start) ─────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct EnableArgs {
+    /// Service to auto-start on boot (default: bridge).
+    #[arg(default_value = "bridge")]
+    pub name: String,
+    /// Config the boot service should use (absolute path recommended).
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 }
 
 // ── update ────────────────────────────────────────────────────────────────────

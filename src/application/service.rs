@@ -302,6 +302,43 @@ pub fn exec_internal(service: &str, rest: &[String]) -> Result<()> {
     }
 }
 
+/// Supervised foreground run, used by OS init units (`fbsy enable`).
+///
+/// Unlike [`exec_internal`] (whose *parent* `fbsy run` records the registry), an
+/// init system execs this leaf directly — so it self-registers, then runs the
+/// blocking loop in-process. On exit the entry is left behind but self-heals:
+/// `snapshot`/`show` verify liveness with `is_alive` and report it stopped.
+pub fn run_supervised(service: &str, rest: &[String]) -> Result<()> {
+    let Some(kind) = ServiceKind::from_name(service) else {
+        bail!("unknown service '{service}'");
+    };
+    let name = kind.name().to_string();
+    paths::ensure_dirs()?;
+
+    // Record this process so `show`/`logs`/`status`/`close` see the boot service.
+    let port = match kind {
+        ServiceKind::AtBridge => {
+            let (config, _, _) = parse_bridge(rest);
+            let cfg_path = config.unwrap_or_else(paths::default_config_path);
+            load_bridge_port(&cfg_path)
+        }
+        _ => None,
+    };
+    let exe = std::env::current_exe().unwrap_or_default();
+    registry::write(&RegistryEntry {
+        service: name.clone(),
+        kind: kind.name().to_string(),
+        pid: std::process::id(),
+        port,
+        url: service_url(kind, port),
+        args: rest.to_vec(),
+        started_at: Utc::now().to_rfc3339(),
+        exe: exe.display().to_string(),
+    })?;
+
+    exec_internal(service, rest)
+}
+
 // ── Print-free core (shared by CLI commands and the TUI dashboard) ────────────
 
 /// Live status of one service instance.
@@ -388,10 +425,11 @@ pub fn show() -> Result<()> {
     }
 
     println!(
-        "{:<12} {:<8} {:<9} {:<8} {:<7} {:<7} {}",
+        "{:<12} {:<8} {:<9} {:<5} {:<8} {:<7} {:<7} {}",
         style("INSTANCE").bold(),
         style("KIND").bold(),
         style("STATUS").bold(),
+        style("BOOT").bold(),
         style("PID").bold(),
         style("UPTIME").bold(),
         style("PORT").bold(),
@@ -408,11 +446,13 @@ pub fn show() -> Result<()> {
             .map(format_uptime_secs)
             .unwrap_or_else(|| "-".into());
         let address = row.url.clone().unwrap_or_else(|| "-".into());
+        let boot = application::autostart::status_label(&row.name);
         println!(
-            "{:<12} {:<8} {:<9} {:<8} {:<7} {:<7} {}",
+            "{:<12} {:<8} {:<9} {:<5} {:<8} {:<7} {:<7} {}",
             row.name,
             row.kind.name(),
             style("running").green(),
+            boot,
             pid,
             uptime,
             port,
@@ -434,6 +474,15 @@ pub fn close(name: &str) -> Result<()> {
         println!("{name} is not running.");
     }
     Ok(())
+}
+
+/// `enabled (starts on boot)` / `not enabled` label for one instance.
+fn boot_label(name: &str) -> String {
+    if application::autostart::status(name).installed {
+        format!("{}", style("enabled (starts on boot)").green())
+    } else {
+        "not enabled".to_string()
+    }
 }
 
 /// Show one instance's status and where to find its logs.
@@ -464,11 +513,13 @@ pub fn status(name: &str) -> Result<()> {
                 }
             }
             println!("  Uptime:  {}", format_uptime(&entry.started_at));
+            println!("  On boot: {}", boot_label(name));
             println!("  Logs:    {}", log.display());
         }
         _ => {
             println!("Instance: {}", style(name).cyan().bold());
             println!("  Status:  {}", style("stopped").red());
+            println!("  On boot: {}", boot_label(name));
             println!("  Logs:    {}", log.display());
         }
     }

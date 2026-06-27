@@ -30,6 +30,8 @@ pub fn run(cli: Cli) -> Result<()> {
         }),
 
         Command::Run(args) => dispatch_run(args.service),
+        Command::Enable(args) => application::autostart::enable(&args.name, args.config),
+        Command::Disable(args) => application::autostart::disable(&args.name),
         Command::Dashboard => application::dashboard::run(),
         Command::Show => application::service::show(),
         Command::Close(sel) => application::service::close(&sel.service),
@@ -58,6 +60,9 @@ pub fn run(cli: Cli) -> Result<()> {
         },
 
         Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
+        Command::ServiceSupervised(args) => {
+            application::service::run_supervised(&args.service, &args.rest)
+        }
     }
 }
 

@@ -278,6 +278,34 @@ event count, HRMS forward ok/failed, clear/keep decision, and the final sync res
 Mock ZKTeco logs show protocol commands served; mock HRMS logs show request paths and
 webhook event counts. See `docs/LOGGING_CHECKLIST.md` for the full manual test checklist.
 
+### Step 8.5 — Run on boot (survive reboots / power loss)
+
+`fbsy run` / the dashboard start **detached** processes — handy, but the OS kills them on
+shutdown and **nothing brings them back after a reboot**. For an unattended attendance device,
+register the bridge with the OS init system so it **auto-starts at boot and restarts on crash**:
+
+```bash
+fbsy enable bridge      # prints the exact `sudo …` command (needs admin once)
+sudo fbsy enable bridge --config /home/<you>/.config/fbsy/config/config.json
+```
+Run `fbsy enable bridge` **without** sudo first — it prints the precise elevated command with the
+right absolute `--config` baked in (so the boot service uses *your* config, not root's). Then:
+
+| OS | What `enable` installs | Inspect | Disable |
+|---|---|---|---|
+| Linux | systemd unit `/etc/systemd/system/fbsy-bridge.service` (`Restart=always`, runs as you) | `systemctl status fbsy-bridge` · `journalctl -u fbsy-bridge` | `sudo fbsy disable bridge` |
+| macOS | LaunchDaemon `/Library/LaunchDaemons/com.fbsy.bridge.plist` (`RunAtLoad`, `KeepAlive`) | `sudo launchctl list \| grep com.fbsy` | `sudo fbsy disable bridge` |
+| Windows | Scheduled task `fbsy-bridge` (ONSTART, SYSTEM) — run from an **Administrator** PowerShell | `schtasks /query /tn fbsy-bridge` | `fbsy disable bridge` (Administrator) |
+
+The boot service runs the bridge in the foreground under the init system and **self-registers**,
+so `fbsy show` (see the **BOOT** column), `fbsy status bridge` (the **On boot** line), and
+`fbsy logs bridge` all keep working exactly as before. The structured sync trail is redirected to
+the same per-instance log file. To verify without a full reboot: `sudo systemctl restart
+fbsy-bridge` then `fbsy show` — the bridge comes back on its own.
+
+> Tip: only the **bridge** (and optionally **scanner**) are production daemons; the mock device
+> and HRMS servers are for testing and aren't meant to run on boot.
+
 ### Step 9 — Uninstall
 ```bash
 fbsy uninstall            # removes the binary, KEEPS ~/.config/fbsy
