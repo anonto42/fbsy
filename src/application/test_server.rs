@@ -11,6 +11,8 @@ use anyhow::{bail, Result};
 use chrono::Utc;
 use console::style;
 
+use crate::support::network;
+
 const MACHINE_PREPARE_DATA_1: u16 = 20560;
 const MACHINE_PREPARE_DATA_2: u16 = 32130;
 const USHRT_MAX: u16 = 65535;
@@ -37,13 +39,16 @@ struct RawAttendanceMock {
 
 /// Run a mock ZKTeco device server speaking raw TCP protocol.
 pub fn run_device(port: u16, records_count: usize) -> Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+    let bind_addr = format!("0.0.0.0:{port}");
+    let display_addr = format!("{}:{port}", network::lan_host_or_loopback());
+    let listener = TcpListener::bind(&bind_addr)?;
     println!(
         "{} Mock biometric device server listening on {} with {} records pre-populated.",
         style("✔").green().bold(),
-        style(format!("0.0.0.0:{port}")).cyan().bold(),
+        style(&display_addr).cyan().bold(),
         style(records_count).yellow().bold()
     );
+    println!("  Reachable from another LAN device at {display_addr}.");
 
     // Pre-populate mock attendance records
     let now = Utc::now();
@@ -287,12 +292,15 @@ fn mock_template_record(uid: u16, fid: u8, template: &[u8]) -> Vec<u8> {
 
 /// Run a mock HRMS webhook API server.
 pub fn run_hrms(port: u16) -> Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+    let bind_addr = format!("0.0.0.0:{port}");
+    let display_url = format!("http://{}:{port}", network::lan_host_or_loopback());
+    let listener = TcpListener::bind(&bind_addr)?;
     println!(
         "{} Mock HRMS server listening on {}.",
         style("✔").green().bold(),
-        style(format!("http://0.0.0.0:{port}")).cyan().bold()
+        style(&display_url).cyan().bold()
     );
+    println!("  Reachable from another LAN device at {display_url}/webhook.");
     println!("  POST  /webhook                         ← receives attendance events");
     println!("  GET   /api/v1/biometric-devices/pending-jobs ← returns [] (job poller)");
     println!("  POST  /api/v1/biometric-devices/jobs/*/complete ← job completion");

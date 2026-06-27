@@ -23,7 +23,7 @@ use crate::{
         registry::{self, RegistryEntry},
     },
     services::ServiceKind,
-    support::paths,
+    support::{network, paths},
 };
 
 // ── Parent side: `fbsy run <service>` ─────────────────────────────────────────
@@ -167,14 +167,16 @@ pub fn spawn_service_with_exe(
 }
 
 /// The address/URL where a running service can be reached.
-///   zkteco — `127.0.0.1:PORT`        (TCP; use as the device IP in setup)
-///   hrms   — `http://127.0.0.1:PORT` (HTTP; webhook is at `/webhook`)
-///   bridge — `http://127.0.0.1:PORT` (the bridge's local HTTP API)
+///   zkteco — `LAN_IP:PORT`           (TCP; use as the device IP in setup)
+///   hrms   — `http://LAN_IP:PORT`    (HTTP; webhook is at `/webhook`)
+///   bridge — `http://127.0.0.1:PORT` (local-only bridge HTTP API)
 fn service_url(kind: ServiceKind, port: Option<u16>) -> Option<String> {
     let port = port?;
+    let lan_host = network::lan_host_or_loopback();
     Some(match kind {
-        ServiceKind::Zkteco => format!("127.0.0.1:{port}"),
-        ServiceKind::Hrms | ServiceKind::AtBridge => format!("http://127.0.0.1:{port}"),
+        ServiceKind::Zkteco => format!("{lan_host}:{port}"),
+        ServiceKind::Hrms => format!("http://{lan_host}:{port}"),
+        ServiceKind::AtBridge => format!("http://127.0.0.1:{port}"),
     })
 }
 

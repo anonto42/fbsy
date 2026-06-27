@@ -101,6 +101,10 @@ fbsy status dev1
 fbsy logs dev2 -n 20
 fbsy close dev1
 ```
+`fbsy show`, `fbsy status`, and the dashboard display the machine's LAN IP for mock
+`zkteco` and `hrms` services, for example `192.168.1.24:4370`. That is the address
+other machines/devices on the same router should use. On the same machine, `127.0.0.1`
+still works.
 Each prints `✔ <svc> started (pid …)` and writes `run/<svc>.json`, e.g.:
 ```json
 { "service": "hrms", "kind": "hrms", "pid": 5517, "port": 8800,
@@ -133,6 +137,8 @@ A minimal config for the mock setup (what the wizard produces):
   ]
 }
 ```
+If the bridge runs on a different machine than the mock HRMS/device, use the LAN IP
+shown by `fbsy show` instead of `127.0.0.1`.
 
 ### Step 4 — Start the bridge
 ```bash
