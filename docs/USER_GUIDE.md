@@ -218,18 +218,19 @@ your shell rc.
 ```
 fbsy install | uninstall
 
-fbsy run <bridge|zkteco|hrms> [service flags]
+fbsy run <bridge|zkteco|hrms> [--name NAME] [service flags]   # --name = run >1 instance
 fbsy show
 fbsy dashboard
 fbsy status <instance>
 fbsy logs <instance> [-n N] [--follow]
 fbsy close <instance>
+fbsy update [--check]                                         # self-update
 
 fbsy bridge run [--name NAME] [--config PATH --interval N --no-poll]
 fbsy bridge sync [--once] [--device CODE] [--config PATH]
 fbsy bridge config <validate|show|path|setup>
 fbsy bridge doctor [--deep] [--json] [--config PATH]
-fbsy bridge devices <list | test CODE>
+fbsy bridge devices <list | test CODE | info CODE [--users]>
 fbsy bridge webhook test CODE
 
 fbsy zkteco run [--name NAME] [-p 4370 --records 5]

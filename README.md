@@ -168,15 +168,32 @@ fbsy uninstall               # remove the binary (keeps your data dir)
 ### Service management
 ```bash
 fbsy run bridge           # start the bridge (wizard on first run)
-fbsy run zkteco [-p 4370 --records 5]    # start the mock device
-fbsy run hrms   [-p 8800]                # start the mock HRMS
-fbsy show                    # table of all services: status / pid / port / uptime
+fbsy run zkteco [--name dev1 -p 4370 --records 5]   # start a mock device
+fbsy run hrms   [--name hrmsA -p 8800]              # start a mock HRMS
+fbsy show                    # table of all instances: instance / kind / status / port / uptime
 fbsy dashboard               # live full-screen TUI (see below)
-fbsy status <service>        # detail for one service
-fbsy logs <service> [-n 50] [--follow]   # tail a service's log
-fbsy close <service>         # stop a service
+fbsy status <instance>       # detail for one instance
+fbsy logs <instance> [-n 50] [--follow]  # tail an instance's log
+fbsy close <instance>        # stop an instance
 ```
-`<service>` is `bridge`, `zkteco`, or `hrms`. Running `fbsy` with no command is the same as `fbsy show`.
+Running `fbsy` with no command is the same as `fbsy show`.
+
+**Named instances — run a service more than once.** Each `run` accepts `--name` (default =
+the kind's name), so you can run several of the same service on different ports and address
+each by its name. This is how you simulate multiple devices locally to test a 2-device bridge:
+
+```bash
+fbsy run zkteco --name dev1 -p 4370     # mock device #1
+fbsy run zkteco --name dev2 -p 4371     # mock device #2
+fbsy show
+#   INSTANCE  KIND     STATUS   PORT   ADDRESS
+#   dev1      zkteco   running  4370   127.0.0.1:4370
+#   dev2      zkteco   running  4371   127.0.0.1:4371
+fbsy close dev2 ; fbsy logs dev1
+```
+The **bridge** itself is normally one instance handling N devices via its config `devices[]`
+array (you point GATE-01→`127.0.0.1:4370`, GATE-02→`127.0.0.1:4371`), but it too can run
+multiple named instances with `--name` + `--config` if you ever need separate bridges.
 
 ### `bridge` (the real bridge)
 ```bash
@@ -225,10 +242,10 @@ A full-screen terminal UI that auto-refreshes and lets you control services — 
 ```
 
 **Two ways to drive it:**
-- **Single keys:** ↑/↓ (or j/k) select · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle logs · `q`/Esc quit.
-- **Command bar:** press `:` then type a full command — `start|stop|restart <svc>`, `sync [deviceCode]`, `logs <svc>`, `select <svc>`, `help`, `quit`. The available commands are always listed in the panel.
+- **Single keys:** ↑/↓ (or j/k) select · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle logs · **`a` all-instance logs** · `q`/Esc quit.
+- **Command bar:** press `:` then type a full command — `start <kind>`, `stop|restart <instance>`, `sync [deviceCode]`, `logs <instance>|all`, `select <instance>`, `help`, `quit`. The available commands are always listed in the panel.
 
-Needs a real terminal (prints a hint if piped).
+The dashboard lists **every running instance** (plus the default kinds as startable rows). The `a` key (or `logs all`) shows a **combined live tail of every running instance**, each line tagged `[instance]` — so you can watch all services at once. Needs a real terminal (prints a hint if piped).
 
 ---
 

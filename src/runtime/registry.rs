@@ -102,3 +102,35 @@ pub fn list() -> Result<Vec<RegistryEntry>> {
     entries.sort_by_key(|e| e.kind().map(|k| k as u8).unwrap_or(255));
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(service: &str, kind: &str) -> RegistryEntry {
+        RegistryEntry {
+            service: service.to_string(),
+            kind: kind.to_string(),
+            pid: 1,
+            port: None,
+            url: None,
+            args: vec![],
+            started_at: String::new(),
+            exe: String::new(),
+        }
+    }
+
+    #[test]
+    fn kind_resolves_from_field() {
+        // A named instance carries its kind explicitly.
+        assert_eq!(entry("dev2", "zkteco").kind(), Some(ServiceKind::Zkteco));
+    }
+
+    #[test]
+    fn kind_falls_back_to_instance_name_for_legacy_files() {
+        // Older single-instance files had no `kind` — derive it from the name.
+        assert_eq!(entry("zkteco", "").kind(), Some(ServiceKind::Zkteco));
+        assert_eq!(entry("bridge", "").kind(), Some(ServiceKind::AtBridge));
+        assert_eq!(entry("dev2", "").kind(), None); // unknown name, no kind
+    }
+}

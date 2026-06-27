@@ -39,14 +39,16 @@ pub fn start_job_poller(cfg: &BridgeConfig) {
 
     thread::spawn(move || {
         let client = ReqwestHrmsClient::default();
-        eprintln!(
-            "Job poller started: baseUrl={base_url}, interval={interval}s, devices={}",
+        println!(
+            "job-poll: started (baseUrl={base_url}, every {interval}s, devices=[{}])",
             device_codes.join(", ")
         );
         loop {
             thread::sleep(Duration::from_secs(interval));
-            if let Err(err) = poll_once(&client, &base_url, &token, &device_codes, &devices) {
-                eprintln!("Job poller failed: {err}");
+            match poll_once(&client, &base_url, &token, &device_codes, &devices) {
+                Ok(0) => {} // nothing pending — stay quiet
+                Ok(n) => println!("job-poll: processed {n} job(s)"),
+                Err(err) => eprintln!("job-poll: cycle failed: {err}"),
             }
         }
     });
@@ -64,23 +66,32 @@ fn poll_once(
         .map_err(|err| err.to_string())?;
     let count = jobs.len();
     if count > 0 {
-        eprintln!("Job poller fetched {count} pending job(s)");
+        println!("job-poll: {count} pending job(s)");
     }
     let connector = ZktecoTcpConnector;
     for job in jobs {
-        eprintln!(
-            "Job poller executing job={} type={} device={}",
-            job.id, job.job_type, job.device_code
+        println!(
+            "job-poll: → {} {} (job {})",
+            job.job_type, job.device_code, job.id
         );
         let completion = execute_job(&job, devices, &connector);
-        let ok = completion.ok;
-        if let Err(err) = client.complete_job(base_url, token, &job.id, &completion) {
-            eprintln!("Failed to complete job {}: {err}", job.id);
+        let outcome = if completion.ok {
+            "ok".to_string()
         } else {
+            format!(
+                "FAILED: {}",
+                completion.error.as_deref().unwrap_or("unknown error")
+            )
+        };
+        if let Err(err) = client.complete_job(base_url, token, &job.id, &completion) {
             eprintln!(
-                "Job poller completed job={} status={}",
-                job.id,
-                if ok { "ok" } else { "error" }
+                "job-poll: ✗ could not report job {} completion: {err}",
+                job.id
+            );
+        } else {
+            println!(
+                "job-poll: ✓ {} {} → {outcome}",
+                job.job_type, job.device_code
             );
         }
     }
