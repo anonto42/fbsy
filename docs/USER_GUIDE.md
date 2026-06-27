@@ -204,20 +204,26 @@ fbsy dashboard
 ```
 A full-screen TUI (needs a real terminal). It has **two ways to drive it**:
 
+**Focus model:** `Tab` switches focus between the **service table** and the **log pane**.
+When the table is focused, ↑/↓ move the selection; when the logs are focused, ↑/↓ scroll
+them. The focused pane's border brightens so you always know what the arrows will do.
+
 **Single keys:**
 | Key | Action |
 |---|---|
-| ↑/↓ or k/j | move selection |
+| Tab | switch focus: service table ⇄ log pane |
+| ↑/↓ or k/j | table focus: move selection · log focus: scroll logs |
 | s | start selected service |
 | x | stop selected service |
 | r | restart selected service |
 | y | sync now (bridge) |
-| l | toggle the log pane (live tail of the selected service) |
-| a | toggle combined logs from all running instances |
-| PgUp / PgDn | scroll service logs older / newer |
-| Home / End | jump to oldest / newest loaded service log lines |
+| l | toggle the log pane and focus it |
+| a | combined logs from all running instances, **time-merged** and tagged `[instance]` |
+| PgUp / PgDn | scroll the log pane older / newer |
+| Home / End | jump to oldest / newest loaded log lines |
+| Esc | log focus → table · table focus → quit |
 | ? | help overlay |
-| q / Esc | quit (restores the terminal cleanly) |
+| q | quit (restores the terminal cleanly) |
 
 **Command bar:** press `:` then type a command, Enter to run, Esc to cancel:
 | Command | Action |
@@ -256,8 +262,19 @@ fbsy logs <instance> [-n 50] [--follow]   # tail a service log (follow = live)
 fbsy status <instance>                     # one service instance's status + log path
 fbsy close <instance>                      # stop an instance (SIGTERM + clear registry)
 ```
-Bridge service logs include sync lifecycle lines: device connection, pulled record count,
-mapped HRMS event count, forwarded count, clear/keep decision, and final sync result.
+**Structured logs (observability).** Every service writes timestamped, leveled, tagged
+lines to its durable per-instance log file (append mode — they survive restarts for
+after-the-fact diagnosis). The shape is `<rfc3339> <LEVEL> [component] message`, e.g.:
+```text
+2026-06-27T05:31:49.089Z INFO  [sync MOCK-GATE-01] device responded: connected
+2026-06-27T05:31:49.089Z INFO  [sync MOCK-GATE-01] device returned 5 attendance record(s)
+2026-06-27T05:31:49.091Z INFO  [sync MOCK-GATE-01] forwarded 5/5 event(s) to HRMS → ok
+2026-06-27T05:31:49.091Z INFO  [sync MOCK-GATE-01] sync done: ok=true pulled=5 forwarded=5 cleared=false
+```
+Because every line is timestamped, the dashboard's `a` view interleaves all running
+services into one chronological stream. Grep for problems with `grep ' ERROR ' <log>`.
+The bridge trail covers: device call → connected/failed, records pulled, mapped HRMS
+event count, HRMS forward ok/failed, clear/keep decision, and the final sync result.
 Mock ZKTeco logs show protocol commands served; mock HRMS logs show request paths and
 webhook event counts. See `docs/LOGGING_CHECKLIST.md` for the full manual test checklist.
 

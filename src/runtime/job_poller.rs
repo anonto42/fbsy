@@ -13,6 +13,7 @@ use crate::{
     config::{BridgeConfig, BridgeDeviceConfig},
     domain::FingerTemplatePayload,
     ports::device::DeviceConnector,
+    support::log,
 };
 
 /// Start a background HRMS job poller when job polling is configured.
@@ -21,7 +22,10 @@ pub fn start_job_poller(cfg: &BridgeConfig) {
         return;
     };
     let Some(token) = job_poll_token(cfg) else {
-        eprintln!("Job poller not started: no device apiKey available");
+        log::warn(
+            "jobpoll",
+            format_args!("not started: no device apiKey available"),
+        );
         return;
     };
     let interval = cfg.job_poll_interval_seconds;
@@ -39,16 +43,19 @@ pub fn start_job_poller(cfg: &BridgeConfig) {
 
     thread::spawn(move || {
         let client = ReqwestHrmsClient::default();
-        println!(
-            "job-poll: started (baseUrl={base_url}, every {interval}s, devices=[{}])",
-            device_codes.join(", ")
+        log::info(
+            "jobpoll",
+            format_args!(
+                "started (baseUrl={base_url}, every {interval}s, devices=[{}])",
+                device_codes.join(", ")
+            ),
         );
         loop {
             thread::sleep(Duration::from_secs(interval));
             match poll_once(&client, &base_url, &token, &device_codes, &devices) {
                 Ok(0) => {} // nothing pending — stay quiet
-                Ok(n) => println!("job-poll: processed {n} job(s)"),
-                Err(err) => eprintln!("job-poll: cycle failed: {err}"),
+                Ok(n) => log::info("jobpoll", format_args!("processed {n} job(s)")),
+                Err(err) => log::error("jobpoll", format_args!("cycle failed: {err}")),
             }
         }
     });
@@ -66,13 +73,13 @@ fn poll_once(
         .map_err(|err| err.to_string())?;
     let count = jobs.len();
     if count > 0 {
-        println!("job-poll: {count} pending job(s)");
+        log::info("jobpoll", format_args!("{count} pending job(s)"));
     }
     let connector = ZktecoTcpConnector;
     for job in jobs {
-        println!(
-            "job-poll: → {} {} (job {})",
-            job.job_type, job.device_code, job.id
+        log::info(
+            "jobpoll",
+            format_args!("→ {} {} (job {})", job.job_type, job.device_code, job.id),
         );
         let completion = execute_job(&job, devices, &connector);
         let outcome = if completion.ok {
@@ -84,14 +91,20 @@ fn poll_once(
             )
         };
         if let Err(err) = client.complete_job(base_url, token, &job.id, &completion) {
-            eprintln!(
-                "job-poll: ✗ could not report job {} completion: {err}",
-                job.id
+            log::error(
+                "jobpoll",
+                format_args!("✗ could not report job {} completion: {err}", job.id),
             );
         } else {
-            println!(
-                "job-poll: ✓ {} {} → {outcome}",
-                job.job_type, job.device_code
+            let level = if completion.ok {
+                log::Level::Info
+            } else {
+                log::Level::Error
+            };
+            log::event(
+                level,
+                "jobpoll",
+                format_args!("✓ {} {} → {outcome}", job.job_type, job.device_code),
             );
         }
     }

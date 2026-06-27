@@ -520,17 +520,36 @@ pub fn logs(name: &str, lines: usize, follow: bool) -> Result<()> {
     Ok(())
 }
 
-/// Combined recent log lines from every running instance, each prefixed with
-/// `[instance]`. Used by the dashboard's "all logs" view.
+/// A merged, time-ordered view of every running instance's recent log lines,
+/// each prefixed with `[instance]`. Lines are interleaved by their leading
+/// RFC 3339 timestamp; lines without one (e.g. multi-line payloads or banners)
+/// carry forward the previous line's time so they stay grouped. Used by the
+/// dashboard's "all logs" view.
 pub fn tail_all_running(per_instance: usize) -> Vec<String> {
-    let mut out = Vec::new();
+    use crate::support::log::parse_timestamp;
+
+    // (timestamp, sequence, instance, raw_line). The sequence is a stable
+    // tiebreaker so same-millisecond lines keep their original file order.
+    let mut rows: Vec<(DateTime<Utc>, usize, String, String)> = Vec::new();
+    let mut seq = 0usize;
     for s in snapshot() {
         let log = paths::service_log_path(&s.name);
+        // Carry-forward time starts at the epoch so untimestamped leading lines
+        // sort before the first real event rather than to "now".
+        let mut carry = DateTime::<Utc>::MIN_UTC;
         for line in tail_lines(&log, per_instance) {
-            out.push(format!("[{}] {line}", s.name));
+            if let Some(ts) = parse_timestamp(&line) {
+                carry = ts;
+            }
+            rows.push((carry, seq, s.name.clone(), line));
+            seq += 1;
         }
     }
-    out
+    // Stable sort by (timestamp, sequence) keeps within-instance order intact.
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    rows.into_iter()
+        .map(|(_, _, name, line)| format!("[{name}] {line}"))
+        .collect()
 }
 
 fn follow_log(log: &std::path::Path, mut offset: usize) -> Result<()> {

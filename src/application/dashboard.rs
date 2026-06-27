@@ -36,6 +36,13 @@ enum Mode {
     Command,
 }
 
+/// Which pane the arrow keys drive: the service table or the log view.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Focus {
+    Table,
+    Logs,
+}
+
 /// Captured output of a passthrough CLI command, shown in a scrollable overlay.
 struct OutputView {
     title: String,
@@ -48,6 +55,7 @@ struct App {
     show_logs: bool,
     all_logs: bool,
     log_scroll: usize,
+    focus: Focus,
     show_help: bool,
     /// Some(view) while a captured CLI command's output overlay is open.
     output: Option<OutputView>,
@@ -68,6 +76,7 @@ impl App {
             show_logs: true,
             all_logs: false,
             log_scroll: 0,
+            focus: Focus::Table,
             show_help: false,
             output: None,
             pending_attach: None,
@@ -151,68 +160,122 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
         }
         return;
     }
+    // Keys handled the same regardless of which pane is focused.
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
-        KeyCode::Char('?') => app.show_help = true,
+        KeyCode::Char('q') => {
+            app.quit = true;
+            return;
+        }
+        KeyCode::Char('?') => {
+            app.show_help = true;
+            return;
+        }
         KeyCode::Char(':') => {
             app.mode = Mode::Command;
             app.input.clear();
+            return;
         }
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.selected = app.selected.saturating_sub(1);
-            app.log_scroll = 0;
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if app.selected + 1 < rows.len() {
-                app.selected += 1;
-                app.log_scroll = 0;
-            }
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.focus = match app.focus {
+                Focus::Table => {
+                    app.show_logs = true;
+                    Focus::Logs
+                }
+                Focus::Logs => Focus::Table,
+            };
+            app.status = focus_hint(app.focus);
+            return;
         }
         KeyCode::Char('l') => {
             app.show_logs = !app.show_logs;
+            app.focus = if app.show_logs {
+                Focus::Logs
+            } else {
+                Focus::Table
+            };
             app.log_scroll = 0;
+            return;
         }
         KeyCode::Char('a') => {
             app.all_logs = !app.all_logs;
             app.show_logs = true;
+            app.focus = Focus::Logs;
             app.log_scroll = 0;
             app.status = if app.all_logs {
-                "showing logs from all running instances".to_string()
+                "logs: all running instances (↑/↓ scroll, Tab/Esc back to table)".to_string()
             } else {
-                "showing selected instance logs".to_string()
+                "logs: selected instance".to_string()
             };
-        }
-        KeyCode::PageUp => {
-            app.show_logs = true;
-            app.log_scroll = app.log_scroll.saturating_add(10);
-        }
-        KeyCode::PageDown => {
-            app.log_scroll = app.log_scroll.saturating_sub(10);
-        }
-        KeyCode::Home => {
-            app.show_logs = true;
-            app.log_scroll = usize::MAX;
-        }
-        KeyCode::End => {
-            app.log_scroll = 0;
+            return;
         }
         KeyCode::Char('s') => {
             if let Some(row) = rows.get(app.selected) {
                 run_action(app, Action::Start(row.kind));
             }
+            return;
         }
         KeyCode::Char('x') => {
             if let Some(row) = rows.get(app.selected) {
                 run_action(app, Action::Stop(row.name.clone()));
             }
+            return;
         }
         KeyCode::Char('r') => {
             if let Some(row) = rows.get(app.selected) {
                 run_action(app, Action::Restart(row.name.clone(), row.kind));
             }
+            return;
         }
-        KeyCode::Char('y') => run_action(app, Action::Sync(None)),
+        KeyCode::Char('y') => {
+            run_action(app, Action::Sync(None));
+            return;
+        }
         _ => {}
+    }
+
+    // Pane-specific navigation: arrows scroll the focused pane.
+    match app.focus {
+        Focus::Logs => match code {
+            KeyCode::Esc => {
+                app.focus = Focus::Table;
+                app.status = focus_hint(Focus::Table);
+            }
+            KeyCode::Up | KeyCode::Char('k') => app.log_scroll = app.log_scroll.saturating_add(1),
+            KeyCode::Down | KeyCode::Char('j') => app.log_scroll = app.log_scroll.saturating_sub(1),
+            KeyCode::PageUp => app.log_scroll = app.log_scroll.saturating_add(10),
+            KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
+            KeyCode::Home => app.log_scroll = usize::MAX, // oldest
+            KeyCode::End => app.log_scroll = 0,           // newest
+            _ => {}
+        },
+        Focus::Table => match code {
+            KeyCode::Esc => app.quit = true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.selected = app.selected.saturating_sub(1);
+                app.log_scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.selected + 1 < rows.len() {
+                    app.selected += 1;
+                    app.log_scroll = 0;
+                }
+            }
+            // PgUp/PgDn still scroll logs even from the table, for convenience.
+            KeyCode::PageUp => {
+                app.show_logs = true;
+                app.log_scroll = app.log_scroll.saturating_add(10);
+            }
+            KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
+            _ => {}
+        },
+    }
+}
+
+/// Status-line hint describing what the arrow keys do for the given focus.
+fn focus_hint(focus: Focus) -> String {
+    match focus {
+        Focus::Table => "focus: table (↑/↓ select · Tab → logs)".to_string(),
+        Focus::Logs => "focus: logs (↑/↓ scroll · Tab/Esc → table)".to_string(),
     }
 }
 
@@ -609,15 +672,17 @@ fn draw_help(frame: &mut Frame, full: Rect) {
 
     let lines = vec![
         Line::from(vec![Span::styled("Single-key shortcuts", yellow)]),
-        row("↑/↓ or j/k", "move selection"),
+        row("Tab", "switch focus: service table ⇄ log pane"),
+        row("↑/↓ or j/k", "table focus: select · log focus: scroll"),
         row("s", "start selected service (default name + port)"),
         row("x", "stop selected instance"),
         row("r", "restart selected instance"),
         row("y", "run a one-off sync now"),
-        row("l", "toggle the log pane"),
-        row("a", "toggle logs from ALL running instances"),
+        row("l", "toggle the log pane (and focus it)"),
+        row("a", "logs from ALL running instances, time-merged"),
         row("PgUp / PgDn", "scroll log pane older / newer"),
         row("Home / End", "jump to oldest / newest log lines"),
+        row("Esc", "log focus → table · table focus → quit"),
         row("? / q", "this help / quit"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -780,14 +845,31 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
         Constraint::Length(8),
         Constraint::Min(22),
     ];
+    // The table border brightens when it holds focus so the user can tell
+    // whether the arrow keys move the selection or scroll the logs.
+    let focused = app.focus == Focus::Table;
+    let (title, border_style) = if focused {
+        (" services (focus) ", Style::default().fg(Color::Cyan))
+    } else {
+        (" services ", Style::default().dim())
+    };
     let table = Table::new(body, widths)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(" services "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        )
         // A bold + cyan highlight + a ▶ marker indicates selection without
-        // inverting the per-cell status colors.
+        // inverting the per-cell status colors. Dim it when the logs are focused.
         .row_highlight_style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(if focused {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                })
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -842,8 +924,24 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
         (max, current) if current == max => format!("oldest · scroll {current}/{max}"),
         (max, current) => format!("scroll {current}/{max}"),
     };
-    let title = format!(" {title_base} · {scroll_label} · PgUp/PgDn Home/End ");
-    let para = Paragraph::new(shown).block(Block::default().borders(Borders::ALL).title(title));
+    let focused = app.focus == Focus::Logs;
+    let focus_tag = if focused {
+        " (focus · ↑/↓ scroll)"
+    } else {
+        ""
+    };
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().dim()
+    };
+    let title = format!(" {title_base}{focus_tag} · {scroll_label} ");
+    let para = Paragraph::new(shown).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title),
+    );
     frame.render_widget(para, area);
 }
 
@@ -871,14 +969,14 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
         ]
     };
     let mut line1 = Vec::new();
-    line1.extend(key("↑/↓", "select"));
+    line1.extend(key("Tab", "focus table/logs"));
+    line1.extend(key("↑/↓", "select/scroll"));
     line1.extend(key("s", "start"));
     line1.extend(key("x", "stop"));
     line1.extend(key("r", "restart"));
     line1.extend(key("y", "sync"));
     line1.extend(key("l", "logs"));
     line1.extend(key("a", "all logs"));
-    line1.extend(key("PgUp/PgDn", "scroll logs"));
     line1.extend(key("?", "help"));
     line1.extend(key("q", "quit"));
 

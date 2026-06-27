@@ -13,6 +13,7 @@ use crate::{
         device::{DeviceClient, DeviceConnector},
         hrms::HrmsClient,
     },
+    support::log::{self, Level},
 };
 
 /// Runtime state for one configured device.
@@ -72,12 +73,15 @@ impl DeviceSyncState {
     /// Run one sync attempt for this device.
     pub fn sync_once(&self) -> SyncResult {
         let started_at = now_iso();
-        self.log(format_args!("sync start at {started_at}"));
+        self.log(Level::Info, format_args!("sync start at {started_at}"));
 
         let guard = match self.lock.try_lock() {
             Ok(guard) => guard,
             Err(_) => {
-                self.log(format_args!("sync skipped: already in progress"));
+                self.log(
+                    Level::Warn,
+                    format_args!("sync skipped: already in progress"),
+                );
                 return self.store_result(SyncResult {
                     ok: false,
                     device_code: self.device.device_code.clone(),
@@ -92,68 +96,77 @@ impl DeviceSyncState {
 
         let result = self.sync_once_locked(started_at);
         drop(guard);
-        self.log(format_args!(
-            "sync finish: ok={} pulled={} forwarded={} cleared={} message=\"{}\"",
-            result.ok,
-            result.pulled,
-            result.forwarded,
-            result.device_attendance_cleared,
-            result.message
-        ));
+        let level = if result.ok { Level::Info } else { Level::Error };
+        self.log(
+            level,
+            format_args!(
+                "sync done: ok={} pulled={} forwarded={} cleared={} message=\"{}\"",
+                result.ok,
+                result.pulled,
+                result.forwarded,
+                result.device_attendance_cleared,
+                result.message
+            ),
+        );
         self.store_result(result)
     }
 
     fn sync_once_locked(&self, started_at: String) -> SyncResult {
-        self.log(format_args!(
-            "connecting to device {} at {}:{} timeout={}s udp={} omit_ping={}",
-            self.device.device_code,
-            self.device.device_ip,
-            self.device.device_port,
-            self.device.device_timeout,
-            self.device.device_force_udp,
-            self.device.device_omit_ping
-        ));
+        self.log(
+            Level::Info,
+            format_args!(
+                "calling device {}:{} (timeout={}s udp={} omit_ping={})",
+                self.device.device_ip,
+                self.device.device_port,
+                self.device.device_timeout,
+                self.device.device_force_udp,
+                self.device.device_omit_ping
+            ),
+        );
         let mut client = match self.connector.connect(&self.device) {
             Ok(client) => client,
             Err(err) => {
                 let message = sanitize(&err.to_string(), &self.device);
-                self.log(format_args!("device connection failed: {message}"));
+                self.log(Level::Error, format_args!("device call failed: {message}"));
                 return self.failure(0, 0, started_at, message);
             }
         };
-        self.log(format_args!("device connected"));
+        self.log(Level::Info, format_args!("device responded: connected"));
 
         let result = self.sync_with_client(client.as_mut(), started_at);
         client.disconnect();
-        self.log(format_args!("device disconnected"));
+        self.log(Level::Info, format_args!("device disconnected"));
         result
     }
 
     fn sync_with_client(&self, client: &mut dyn DeviceClient, started_at: String) -> SyncResult {
-        self.log(format_args!("pulling attendance records"));
+        self.log(Level::Info, format_args!("reading attendance from device"));
         let attendance = match client.pull_attendance() {
             Ok(records) => {
-                self.log(format_args!(
-                    "pulled {} raw attendance record(s)",
-                    records.len()
-                ));
+                self.log(
+                    Level::Info,
+                    format_args!("device returned {} attendance record(s)", records.len()),
+                );
                 records
             }
             Err(err) => {
                 let message = sanitize(&err.to_string(), &self.device);
-                self.log(format_args!("attendance pull failed: {message}"));
+                self.log(Level::Error, format_args!("device read failed: {message}"));
                 return self.failure(0, 0, started_at, message);
             }
         };
 
         let events = to_hrms_events(&attendance);
-        self.log(format_args!(
-            "mapped {} raw record(s) into {} HRMS event(s)",
-            attendance.len(),
-            events.len()
-        ));
+        self.log(
+            Level::Info,
+            format_args!(
+                "mapped {} record(s) into {} HRMS event(s)",
+                attendance.len(),
+                events.len()
+            ),
+        );
         if events.is_empty() {
-            self.log(format_args!("no HRMS events to forward"));
+            self.log(Level::Info, format_args!("no HRMS events to forward"));
             return SyncResult {
                 ok: true,
                 device_code: self.device.device_code.clone(),
@@ -165,21 +178,28 @@ impl DeviceSyncState {
             };
         }
 
-        self.log(format_args!(
-            "forwarding {} event(s) to HRMS webhook",
-            events.len()
-        ));
+        self.log(
+            Level::Info,
+            format_args!("forwarding {} event(s) to HRMS webhook", events.len()),
+        );
         let webhook = match self
             .hrms
             .forward_events(&self.webhook_url, &self.device, &events)
         {
             Ok(result) => {
-                self.log(format_args!("HRMS accepted {} event(s)", result.received));
+                self.log(
+                    Level::Info,
+                    format_args!(
+                        "forwarded {}/{} event(s) to HRMS → ok",
+                        result.received,
+                        events.len()
+                    ),
+                );
                 result
             }
             Err(err) => {
                 let message = sanitize(&err.to_string(), &self.device);
-                self.log(format_args!("HRMS forward failed: {message}"));
+                self.log(Level::Error, format_args!("HRMS forward failed: {message}"));
                 return self.failure(attendance.len(), 0, started_at, message);
             }
         };
@@ -187,23 +207,27 @@ impl DeviceSyncState {
         let mut cleared = false;
         let mut message = format!("forwarded {} event(s)", events.len());
         if self.device.clear_attendance_after_sync {
-            self.log(format_args!("clearing attendance records on device"));
+            self.log(Level::Info, format_args!("clearing attendance on device"));
             match client.clear_attendance() {
                 Ok(()) => {
                     cleared = true;
-                    self.log(format_args!("device attendance records cleared"));
+                    self.log(Level::Info, format_args!("device attendance cleared"));
                 }
                 Err(err) => {
                     let safe_error = sanitize(&err.to_string(), &self.device);
-                    self.log(format_args!("clear attendance failed: {safe_error}"));
+                    self.log(
+                        Level::Warn,
+                        format_args!("clear attendance failed: {safe_error}"),
+                    );
                     message =
                         format!("forwarded events but failed to clear attendance: {safe_error}");
                 }
             }
         } else {
-            self.log(format_args!(
-                "clear attendance disabled; records remain on device"
-            ));
+            self.log(
+                Level::Info,
+                format_args!("clear attendance disabled; records remain on device"),
+            );
         }
 
         SyncResult {
@@ -242,9 +266,9 @@ impl DeviceSyncState {
         result
     }
 
-    fn log(&self, args: std::fmt::Arguments<'_>) {
+    fn log(&self, level: Level, args: std::fmt::Arguments<'_>) {
         if self.log_progress {
-            println!("[{}] [{}] {args}", now_iso(), self.device.device_code);
+            log::event(level, &format!("sync {}", self.device.device_code), args);
         }
     }
 }

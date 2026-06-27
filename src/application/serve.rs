@@ -23,7 +23,7 @@ use crate::{
     config::BridgeConfig,
     ports::config_store::ConfigStore,
     runtime::{job_poller::start_job_poller, DeviceSyncState},
-    support::paths::default_config_path,
+    support::{log, paths::default_config_path},
 };
 
 /// Prepare the bridge to run as a long-lived local service.
@@ -95,7 +95,7 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
                     let _ = handle_client(stream, states, webhook_url);
                 });
             }
-            Err(err) => eprintln!("HTTP accept failed: {err}"),
+            Err(err) => log::error("http", format_args!("accept failed: {err}")),
         }
     }
     Ok(())
@@ -126,7 +126,10 @@ fn build_states(cfg: &BridgeConfig) -> Arc<Vec<Arc<DeviceSyncState>>> {
 fn start_boot_syncs(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
     for state in states.iter() {
         let state = Arc::clone(state);
-        println!("bridge: scheduling boot sync for {}", state.device_code());
+        log::info(
+            "boot",
+            format_args!("scheduling boot sync for {}", state.device_code()),
+        );
         thread::spawn(move || {
             let _ = state.sync_once();
         });
@@ -136,10 +139,13 @@ fn start_boot_syncs(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
 fn start_schedulers(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
     for state in states.iter() {
         let state = Arc::clone(state);
-        println!(
-            "bridge: scheduler started for {} every {}s",
-            state.device_code(),
-            state.sync_interval_seconds()
+        log::info(
+            "sched",
+            format_args!(
+                "scheduler started for {} every {}s",
+                state.device_code(),
+                state.sync_interval_seconds()
+            ),
         );
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(state.sync_interval_seconds()));
@@ -160,18 +166,21 @@ fn start_auto_updater(interval_hours: u64) {
         loop {
             match crate::application::update::check() {
                 Ok(status) if status.newer => {
-                    println!(
-                        "auto-update: {} -> {} available; launching updater",
-                        status.current, status.latest
+                    log::info(
+                        "update",
+                        format_args!(
+                            "{} -> {} available; launching updater",
+                            status.current, status.latest
+                        ),
                     );
                     if let Err(err) = launch_detached_updater() {
-                        eprintln!("auto-update: could not launch updater: {err}");
+                        log::error("update", format_args!("could not launch updater: {err}"));
                     }
                     // The updater will restart this process; stop checking.
                     return;
                 }
                 Ok(_) => {}
-                Err(err) => eprintln!("auto-update: version check failed: {err}"),
+                Err(err) => log::warn("update", format_args!("version check failed: {err}")),
             }
             thread::sleep(interval);
         }
@@ -222,9 +231,15 @@ fn handle_sync(
     query: &str,
 ) -> Result<()> {
     if let Some(code) = query.strip_prefix("device=") {
-        println!("http: manual sync requested for device {code}");
+        log::info(
+            "http",
+            format_args!("manual sync requested for device {code}"),
+        );
         let Some(state) = states.iter().find(|state| state.device_code() == code) else {
-            println!("http: manual sync rejected; device {code} not found");
+            log::warn(
+                "http",
+                format_args!("manual sync rejected; device {code} not found"),
+            );
             return write_json(
                 stream,
                 404,
@@ -232,7 +247,10 @@ fn handle_sync(
             );
         };
         if state.syncing() {
-            println!("http: manual sync rejected for {code}: already in progress");
+            log::warn(
+                "http",
+                format_args!("manual sync rejected for {code}: already in progress"),
+            );
             return write_json(
                 stream,
                 429,
@@ -243,7 +261,10 @@ fn handle_sync(
         thread::spawn(move || {
             let _ = state.sync_once();
         });
-        println!("http: manual sync accepted for device {code}");
+        log::info(
+            "http",
+            format_args!("manual sync accepted for device {code}"),
+        );
         return write_json(
             stream,
             202,
@@ -251,7 +272,10 @@ fn handle_sync(
         );
     }
 
-    println!("http: manual sync requested for all devices");
+    log::info(
+        "http",
+        format_args!("manual sync requested for all devices"),
+    );
     let mut started = Vec::new();
     let mut skipped = Vec::new();
     for state in states.iter() {
@@ -265,10 +289,13 @@ fn handle_sync(
             });
         }
     }
-    println!(
-        "http: manual sync accepted; started=[{}] skipped=[{}]",
-        started.join(", "),
-        skipped.join(", ")
+    log::info(
+        "http",
+        format_args!(
+            "manual sync accepted; started=[{}] skipped=[{}]",
+            started.join(", "),
+            skipped.join(", ")
+        ),
     );
     write_json(
         stream,

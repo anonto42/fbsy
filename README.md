@@ -242,10 +242,10 @@ A full-screen terminal UI that auto-refreshes and lets you control services — 
 ```
 
 **Two ways to drive it:**
-- **Single keys:** ↑/↓ (or j/k) select · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle logs · **`a` all-instance logs** · `q`/Esc quit.
+- **Single keys:** `Tab` switch focus (table ⇄ logs) · ↑/↓ (or j/k) select **or** scroll logs (depends on focus) · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle+focus logs · **`a` all-instance logs** · `q` quit.
 - **Command bar:** press `:` then type a full command — `start <kind>`, `stop|restart <instance>`, `sync [deviceCode]`, `logs <instance>|all`, `select <instance>`, `help`, `quit`. The available commands are always listed in the panel.
 
-The dashboard lists **every running instance** (plus the default kinds as startable rows). The `a` key (or `logs all`) shows a **combined live tail of every running instance**, each line tagged `[instance]` — so you can watch all services at once. Needs a real terminal (prints a hint if piped).
+The dashboard lists **every running instance** (plus the default kinds as startable rows). The `a` key (or `logs all`) shows a **time-merged live tail of every running instance**, each line tagged `[instance]` — so you watch all services as one chronological stream. Press `Tab` (or `a`/`l`) to focus the log pane, then the arrow keys scroll it. Logs are structured (`<rfc3339> <LEVEL> [component] message`) and persist to per-instance files for diagnosis. Needs a real terminal (prints a hint if piped).
 
 ---
 
