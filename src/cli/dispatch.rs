@@ -8,7 +8,7 @@ use super::{
     args::Cli,
     command::{
         AtBridgeCommand, Command, ConfigCommand, DevicesCommand, HrmsCommand, RunService,
-        WebhookCommand, ZktecoCommand,
+        ScannerCommand, ScannerScanArgs, WebhookCommand, ZktecoCommand,
     },
 };
 
@@ -48,6 +48,14 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Hrms(args) => match args.command {
             HrmsCommand::Run { name, port } => application::service::run_hrms(name, port),
         },
+        Command::Scanner(args) => match args.command {
+            ScannerCommand::Scan(args) => application::scanner::run_scan(scan_options(&args)),
+            ScannerCommand::Run(args) => application::service::run_scanner(
+                args.name,
+                args.interval,
+                scan_options(&args.scan),
+            ),
+        },
 
         Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
     }
@@ -67,6 +75,32 @@ fn dispatch_run(service: RunService) -> Result<()> {
             records,
         } => application::service::run_zkteco(name, port, records),
         RunService::Hrms { name, port } => application::service::run_hrms(name, port),
+        RunService::Scanner {
+            name,
+            cidr,
+            host,
+            port,
+            interval,
+            timeout_ms,
+            device_timeout,
+            password,
+            udp,
+            include_open,
+        } => application::service::run_scanner(
+            name,
+            interval,
+            application::scanner::ScanOptions {
+                cidr,
+                hosts: host,
+                port,
+                scan_timeout_ms: timeout_ms,
+                device_timeout_secs: device_timeout,
+                device_password: password,
+                force_udp: udp,
+                include_open,
+                json: false,
+            },
+        ),
     }
 }
 
@@ -101,5 +135,19 @@ fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
         AtBridgeCommand::Webhook { command } => match command {
             WebhookCommand::Test { code, path } => application::doctor::webhook_test(path, &code),
         },
+    }
+}
+
+fn scan_options(args: &ScannerScanArgs) -> application::scanner::ScanOptions {
+    application::scanner::ScanOptions {
+        cidr: args.cidr.clone(),
+        hosts: args.host.clone(),
+        port: args.port,
+        scan_timeout_ms: args.timeout_ms,
+        device_timeout_secs: args.device_timeout,
+        device_password: args.password,
+        force_udp: args.udp,
+        include_open: args.include_open,
+        json: args.json,
     }
 }

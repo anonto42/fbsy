@@ -52,6 +52,19 @@ When `fbsy run zkteco --name dev1 --port 4370 --records 5` is running,
 - [ ] `CMD_CLEAR_ATTLOG` when attendance is cleared.
 - [ ] Client disconnected.
 
+## Scanner Logs
+
+When `fbsy run scanner --interval 300` is running, `fbsy logs scanner -n 100` should show:
+
+- [ ] Startup target CIDR or host list.
+- [ ] Port, scan interval, TCP timeout, and device protocol timeout.
+- [ ] Scan cycle timestamp.
+- [ ] Number of target hosts being scanned.
+- [ ] Number of candidates found.
+- [ ] Number of confirmed attendance devices.
+- [ ] For each confirmed device: IP, port, serial, firmware, user count, template count, record count, and suggested device code.
+- [ ] For `--include-open`, open-port hosts that failed ZKTeco probing.
+
 ## Mock HRMS Logs
 
 When `fbsy run hrms --name hrms1 --port 8800` is running,

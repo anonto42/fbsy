@@ -47,6 +47,17 @@ pub fn run_hrms(name: Option<String>, port: u16) -> Result<()> {
     start_detached(ServiceKind::Hrms, &name, Some(port), &args)
 }
 
+/// Start the network scanner service, detached.
+pub fn run_scanner(
+    name: Option<String>,
+    interval: u64,
+    opts: application::scanner::ScanOptions,
+) -> Result<()> {
+    let name = name.unwrap_or_else(|| ServiceKind::Scanner.name().to_string());
+    let args = scanner_args(interval, &opts);
+    start_detached(ServiceKind::Scanner, &name, None, &args)
+}
+
 /// Start the real attendance bridge, detached, with an interactive first run.
 pub fn run_at_bridge(
     name: Option<String>,
@@ -171,12 +182,16 @@ pub fn spawn_service_with_exe(
 ///   hrms   — `http://LAN_IP:PORT`    (HTTP; webhook is at `/webhook`)
 ///   bridge — `http://127.0.0.1:PORT` (local-only bridge HTTP API)
 fn service_url(kind: ServiceKind, port: Option<u16>) -> Option<String> {
+    if kind == ServiceKind::Scanner {
+        return Some("local network scanner".to_string());
+    }
     let port = port?;
     let lan_host = network::lan_host_or_loopback();
     Some(match kind {
         ServiceKind::Zkteco => format!("{lan_host}:{port}"),
         ServiceKind::Hrms => format!("http://{lan_host}:{port}"),
         ServiceKind::AtBridge => format!("http://127.0.0.1:{port}"),
+        ServiceKind::Scanner => unreachable!("scanner has no listening port"),
     })
 }
 
@@ -239,6 +254,12 @@ pub fn start_named(
             }
             spawn_service(kind, &name, port, &args)
         }
+        ServiceKind::Scanner => spawn_service(
+            kind,
+            &name,
+            None,
+            &scanner_args(300, &application::scanner::ScanOptions::default()),
+        ),
     }
 }
 
@@ -272,6 +293,10 @@ pub fn exec_internal(service: &str, rest: &[String]) -> Result<()> {
         Some(ServiceKind::AtBridge) => {
             let (config, interval, no_poll) = parse_bridge(rest);
             application::serve::run(interval, no_poll, config)
+        }
+        Some(ServiceKind::Scanner) => {
+            let (interval, opts) = parse_scanner(rest);
+            application::scanner::run_service(opts, interval)
         }
         None => bail!("unknown service '{service}'"),
     }
@@ -467,6 +492,9 @@ fn address_hints(kind: ServiceKind, url: Option<&str>) -> Vec<String> {
             format!("GET  {url}/health    ← status + last sync result"),
             format!("POST {url}/sync      ← trigger a sync"),
         ],
+        ServiceKind::Scanner => vec![format!(
+            "Use `fbsy logs scanner` to see discovered attendance devices"
+        )],
     }
 }
 
@@ -640,4 +668,91 @@ fn parse_bridge(rest: &[String]) -> (Option<PathBuf>, Option<u64>, bool) {
         }
     }
     (config, interval, no_poll)
+}
+
+fn scanner_args(interval: u64, opts: &application::scanner::ScanOptions) -> Vec<String> {
+    let mut args = vec!["--interval".to_string(), interval.to_string()];
+    if let Some(cidr) = &opts.cidr {
+        args.push("--cidr".to_string());
+        args.push(cidr.clone());
+    }
+    for host in &opts.hosts {
+        args.push("--host".to_string());
+        args.push(host.to_string());
+    }
+    args.push("--port".to_string());
+    args.push(opts.port.to_string());
+    args.push("--timeout-ms".to_string());
+    args.push(opts.scan_timeout_ms.to_string());
+    args.push("--device-timeout".to_string());
+    args.push(opts.device_timeout_secs.to_string());
+    args.push("--password".to_string());
+    args.push(opts.device_password.to_string());
+    if opts.force_udp {
+        args.push("--udp".to_string());
+    }
+    if opts.include_open {
+        args.push("--include-open".to_string());
+    }
+    args
+}
+
+fn parse_scanner(rest: &[String]) -> (u64, application::scanner::ScanOptions) {
+    let mut interval = 300u64;
+    let mut opts = application::scanner::ScanOptions::default();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--interval" => {
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    interval = v;
+                }
+                i += 2;
+            }
+            "--cidr" => {
+                opts.cidr = rest.get(i + 1).cloned();
+                i += 2;
+            }
+            "--host" => {
+                if let Some(host) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    opts.hosts.push(host);
+                }
+                i += 2;
+            }
+            "--port" => {
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    opts.port = v;
+                }
+                i += 2;
+            }
+            "--timeout-ms" => {
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    opts.scan_timeout_ms = v;
+                }
+                i += 2;
+            }
+            "--device-timeout" => {
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    opts.device_timeout_secs = v;
+                }
+                i += 2;
+            }
+            "--password" => {
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
+                    opts.device_password = v;
+                }
+                i += 2;
+            }
+            "--udp" => {
+                opts.force_udp = true;
+                i += 1;
+            }
+            "--include-open" => {
+                opts.include_open = true;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    (interval, opts)
 }

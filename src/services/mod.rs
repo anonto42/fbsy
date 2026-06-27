@@ -13,6 +13,8 @@ pub enum ServiceKind {
     Zkteco,
     /// Mock HRMS webhook server for local testing.
     Hrms,
+    /// Local network scanner for discovering attendance devices.
+    Scanner,
 }
 
 impl ServiceKind {
@@ -22,6 +24,7 @@ impl ServiceKind {
             ServiceKind::AtBridge => "bridge",
             ServiceKind::Zkteco => "zkteco",
             ServiceKind::Hrms => "hrms",
+            ServiceKind::Scanner => "scanner",
         }
     }
 
@@ -32,14 +35,16 @@ impl ServiceKind {
             "bridge" | "at-bridge" => Some(ServiceKind::AtBridge),
             "zkteco" => Some(ServiceKind::Zkteco),
             "hrms" => Some(ServiceKind::Hrms),
+            "scanner" => Some(ServiceKind::Scanner),
             _ => None,
         }
     }
 
     /// All services, in display order.
-    pub fn all() -> [ServiceKind; 3] {
+    pub fn all() -> [ServiceKind; 4] {
         [
             ServiceKind::AtBridge,
+            ServiceKind::Scanner,
             ServiceKind::Zkteco,
             ServiceKind::Hrms,
         ]
@@ -51,6 +56,7 @@ impl ServiceKind {
             ServiceKind::AtBridge => "attendance bridge (device -> HRMS)",
             ServiceKind::Zkteco => "mock ZKTeco device server",
             ServiceKind::Hrms => "mock HRMS webhook server",
+            ServiceKind::Scanner => "LAN attendance device scanner",
         }
     }
 }

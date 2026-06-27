@@ -630,6 +630,7 @@ fn draw_help(frame: &mut Frame, full: Rect) {
             " the `fbsy` prefix.".into(),
         ]),
         row("show", "same as `fbsy show`"),
+        row("scanner scan", "discover attendance devices on the LAN"),
         row("bridge doctor --json", "captures command output here"),
         row(
             "bridge devices info CODE --users",
@@ -665,6 +666,10 @@ fn draw_help(frame: &mut Frame, full: Rect) {
         Line::from(vec![
             "  ".into(),
             Span::styled("start bridge --config /path/config.json", cyan),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            Span::styled("start scanner --interval 300", cyan),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(

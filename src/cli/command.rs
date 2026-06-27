@@ -6,7 +6,7 @@
 //! specific flags. A hidden `__service-run` subcommand is the entry point the
 //! detached child process re-enters through.
 
-use std::path::PathBuf;
+use std::{net::Ipv4Addr, path::PathBuf};
 
 use clap::{Args, Subcommand};
 
@@ -40,6 +40,8 @@ pub enum Command {
     Zkteco(ZktecoArgs),
     /// Mock HRMS webhook server.
     Hrms(HrmsArgs),
+    /// Discover attendance devices on the local network.
+    Scanner(ScannerArgs),
 
     /// Internal entry point for detached service processes.
     #[command(name = "__service-run", hide = true)]
@@ -101,6 +103,39 @@ pub enum RunService {
         name: Option<String>,
         #[arg(short = 'p', long, default_value = "8800")]
         port: u16,
+    },
+    /// Start the network scanner service.
+    Scanner {
+        /// Instance name (default: scanner). Use to run more than one.
+        #[arg(long)]
+        name: Option<String>,
+        /// CIDR to scan, for example 192.168.1.0/24. Defaults to this machine's LAN /24.
+        #[arg(long)]
+        cidr: Option<String>,
+        /// Scan one specific host. Can be repeated.
+        #[arg(long)]
+        host: Vec<Ipv4Addr>,
+        /// Device TCP port to probe.
+        #[arg(short = 'p', long, default_value_t = 4370)]
+        port: u16,
+        /// Repeat scan interval for the service.
+        #[arg(long, default_value_t = 300)]
+        interval: u64,
+        /// TCP port probe timeout in milliseconds.
+        #[arg(long, default_value_t = 350)]
+        timeout_ms: u64,
+        /// ZKTeco protocol read/write timeout in seconds.
+        #[arg(long, default_value_t = 2)]
+        device_timeout: u64,
+        /// ZKTeco communication password.
+        #[arg(long, default_value_t = 0)]
+        password: i32,
+        /// Use UDP for the deeper ZKTeco protocol probe.
+        #[arg(long)]
+        udp: bool,
+        /// Include hosts with an open port even when ZKTeco probing fails.
+        #[arg(long)]
+        include_open: bool,
     },
 }
 
@@ -272,11 +307,68 @@ pub enum HrmsCommand {
     },
 }
 
+#[derive(Debug, Args)]
+pub struct ScannerArgs {
+    #[command(subcommand)]
+    pub command: ScannerCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ScannerCommand {
+    /// Scan now and print discovered attendance devices.
+    Scan(ScannerScanArgs),
+    /// Start the scanner as a detached background service.
+    Run(ScannerRunArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ScannerScanArgs {
+    /// CIDR to scan, for example 192.168.1.0/24. Defaults to this machine's LAN /24.
+    #[arg(long)]
+    pub cidr: Option<String>,
+    /// Scan one specific host. Can be repeated.
+    #[arg(long)]
+    pub host: Vec<Ipv4Addr>,
+    /// Device TCP port to probe.
+    #[arg(short = 'p', long, default_value_t = 4370)]
+    pub port: u16,
+    /// TCP port probe timeout in milliseconds.
+    #[arg(long, default_value_t = 350)]
+    pub timeout_ms: u64,
+    /// ZKTeco protocol read/write timeout in seconds.
+    #[arg(long, default_value_t = 2)]
+    pub device_timeout: u64,
+    /// ZKTeco communication password.
+    #[arg(long, default_value_t = 0)]
+    pub password: i32,
+    /// Use UDP for the deeper ZKTeco protocol probe.
+    #[arg(long)]
+    pub udp: bool,
+    /// Include hosts with an open port even when ZKTeco probing fails.
+    #[arg(long)]
+    pub include_open: bool,
+    /// Print machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ScannerRunArgs {
+    /// Instance name (default: scanner). Use to run more than one.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Repeat scan interval for the service.
+    #[arg(long, default_value_t = 300)]
+    pub interval: u64,
+    #[command(flatten)]
+    pub scan: ScannerScanArgs,
+}
+
 // ── hidden internal child entry point ─────────────────────────────────────────
 
 #[derive(Debug, Args)]
 pub struct ServiceRunArgs {
-    /// Service kind: bridge | zkteco | hrms
+    /// Service kind: bridge | zkteco | hrms | scanner
     pub service: String,
     /// Remaining service-specific flags, parsed by the service itself.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

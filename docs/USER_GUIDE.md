@@ -20,10 +20,11 @@ FLOOR-3  ─┘
 
 Three ideas explain everything else:
 
-1. **Services.** `fbsy` manages three of them:
+1. **Services.** `fbsy` manages four of them:
    | Service | Role |
    |---|---|
    | `bridge` | the real bridge — device → HRMS. Run this in production. |
+   | `scanner` | discovers likely ZKTeco attendance devices on the LAN. |
    | `zkteco` | a mock ZKTeco device (fake attendance) for testing without hardware. |
    | `hrms` | a mock HRMS webhook that prints what it receives, for testing. |
 
@@ -85,8 +86,9 @@ No root is required at any point.
 fbsy --help
 ```
 Shows the surface: lifecycle (`install`/`uninstall`), service control
-(`run`/`show`/`dashboard`/`status`/`logs`/`close`), and the three services as their own
-command groups (`bridge`, `zkteco`, `hrms`). Running `fbsy` with no command = `fbsy show`.
+(`run`/`show`/`dashboard`/`status`/`logs`/`close`), and the services as their own
+command groups (`bridge`, `scanner`, `zkteco`, `hrms`). Running `fbsy` with no command =
+`fbsy show`.
 
 ### Step 2 — Start the mock services (testing without hardware)
 ```bash
@@ -124,7 +126,24 @@ a **detached child** (Unix `setsid`, Windows `DETACHED_PROCESS`), redirecting th
 output to `logs/<instance>.log`. The parent records the instance name plus service kind
 and exits; the child keeps running.
 
-### Step 3 — Configure the bridge
+### Step 3 — Discover real attendance devices
+```bash
+fbsy scanner scan                         # scan this machine's LAN /24 on port 4370
+fbsy scanner scan --host 192.168.1.50     # scan one known IP
+fbsy scanner scan --cidr 192.168.1.0/24   # scan a specific subnet
+fbsy scanner scan --json                  # machine-readable output
+```
+The scanner first checks whether port `4370` is open, then tries the ZKTeco protocol.
+When a device responds, it prints IP, firmware, serial, user/template/attendance counts,
+and a suggested device config block you can copy into the setup wizard values.
+
+Run it as a background service when you want repeated discovery logs:
+```bash
+fbsy run scanner --interval 300
+fbsy logs scanner -n 100
+```
+
+### Step 4 — Configure the bridge
 On a real first run, `fbsy run bridge` launches an **interactive wizard** that asks for
 the webhook URL, device IP/port, deviceCode, apiKey, etc., and writes
 `config/config.json`. You can also run the wizard directly:
@@ -149,7 +168,7 @@ A minimal config for the mock setup (what the wizard produces):
 If the bridge runs on a different machine than the mock HRMS/device, use the LAN IP
 shown by `fbsy show` instead of `127.0.0.1`.
 
-### Step 4 — Start the bridge
+### Step 5 — Start the bridge
 ```bash
 fbsy run bridge
 ```
@@ -160,7 +179,7 @@ fbsy run bridge
 The running bridge: schedules a sync per device, runs the optional HRMS job poller, and
 exposes a local HTTP API (see §5).
 
-### Step 5 — Watch the pipeline
+### Step 6 — Watch the pipeline
 ```bash
 fbsy show                       # table: SERVICE STATUS PID PORT UPTIME
 fbsy bridge sync --once      # pull attendance now, then exit
@@ -179,7 +198,7 @@ and the HRMS log shows the forwarded events:
   "timestamp": "2026-…Z", "verificationMethod": "fingerbridge" }
 ```
 
-### Step 6 — The live dashboard
+### Step 7 — The live dashboard
 ```bash
 fbsy dashboard
 ```
@@ -224,13 +243,14 @@ Example 2-device test from inside the dashboard:
 :start zkteco --name dev1 --port 4370
 :start zkteco --name dev2 --port 4371
 :start hrms
+:start scanner
 :bridge config setup
 :start bridge
 :sync
 :logs all
 ```
 
-### Step 7 — Logs, status, stop
+### Step 8 — Logs, status, stop
 ```bash
 fbsy logs <instance> [-n 50] [--follow]   # tail a service log (follow = live)
 fbsy status <instance>                     # one service instance's status + log path
@@ -241,7 +261,7 @@ mapped HRMS event count, forwarded count, clear/keep decision, and final sync re
 Mock ZKTeco logs show protocol commands served; mock HRMS logs show request paths and
 webhook event counts. See `docs/LOGGING_CHECKLIST.md` for the full manual test checklist.
 
-### Step 8 — Uninstall
+### Step 9 — Uninstall
 ```bash
 fbsy uninstall            # removes the binary, KEEPS ~/.config/fbsy
 ```
@@ -256,7 +276,7 @@ the data directory and the PATH entry manually.
 ```
 fbsy install | uninstall
 
-fbsy run <bridge|zkteco|hrms> [--name NAME] [service flags]   # --name = run >1 instance
+fbsy run <bridge|scanner|zkteco|hrms> [--name NAME] [service flags] # --name = run >1 instance
 fbsy show
 fbsy dashboard
 fbsy status <instance>
@@ -270,6 +290,9 @@ fbsy bridge config <validate|show|path|setup>
 fbsy bridge doctor [--deep] [--json] [--config PATH]
 fbsy bridge devices <list | test CODE | info CODE [--users]>
 fbsy bridge webhook test CODE
+
+fbsy scanner scan [--cidr CIDR | --host IP] [-p 4370] [--json] [--include-open]
+fbsy scanner run [--name NAME] [--interval N] [scan flags]
 
 fbsy zkteco run [--name NAME] [-p 4370 --records 5]
 fbsy hrms   run [--name NAME] [-p 8800]

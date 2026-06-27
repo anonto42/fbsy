@@ -22,6 +22,8 @@ Recommended command style:
 fbsy show
 fbsy dashboard
 fbsy run bridge
+fbsy run scanner --interval 300
+fbsy scanner scan --cidr 192.168.1.0/24
 fbsy run zkteco --name dev1 -p 4370
 fbsy bridge doctor
 fbsy bridge sync --once
@@ -43,6 +45,8 @@ fbsy at-bridge run
 | `run <service>` | Start a detached named service instance |
 | `show` | List running instances |
 | `dashboard` | Monitor/control instances in a TUI; its `:` bar can run any CLI command without `fbsy` |
+| `scanner scan` | Discover likely ZKTeco attendance devices on the LAN |
+| `run scanner` | Run repeated network discovery as a detached service |
 | `bridge doctor` | Show local readiness and config path |
 | `bridge config setup` | Run first-time configuration wizard |
 | `bridge sync --once` | Pull and forward attendance once, then exit |
