@@ -6,7 +6,7 @@
 //!   - Linux/macOS: ~/.local/bin/fbsy
 //!   - Windows:     %LOCALAPPDATA%\Programs\fbsy\fbsy.exe
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use console::style;
@@ -55,12 +55,7 @@ pub fn install() -> Result<()> {
 pub fn uninstall() -> Result<()> {
     let dst = install_bin_path()?;
     if dst.exists() {
-        std::fs::remove_file(&dst).with_context(|| format!("remove {}", dst.display()))?;
-        println!(
-            "{} Removed {}",
-            style("✔").green().bold(),
-            style(dst.display()).cyan()
-        );
+        remove_installed_binary(&dst)?;
     } else {
         println!("Nothing to remove at {}", dst.display());
     }
@@ -70,6 +65,112 @@ pub fn uninstall() -> Result<()> {
     );
     println!("If a PATH line was added to your shell rc, remove it manually.");
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn remove_installed_binary(dst: &Path) -> Result<()> {
+    std::fs::remove_file(dst).with_context(|| format!("remove {}", dst.display()))?;
+    println!(
+        "{} Removed {}",
+        style("✔").green().bold(),
+        style(dst.display()).cyan()
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_installed_binary(dst: &Path) -> Result<()> {
+    match std::fs::remove_file(dst) {
+        Ok(()) => {
+            println!(
+                "{} Removed {}",
+                style("✔").green().bold(),
+                style(dst.display()).cyan()
+            );
+            Ok(())
+        }
+        Err(_err) if current_exe_matches(dst) => {
+            schedule_windows_self_delete(dst)?;
+            println!(
+                "{} Scheduled removal of {}",
+                style("✔").green().bold(),
+                style(dst.display()).cyan()
+            );
+            println!(
+                "Windows locks the running .exe, so fbsy will delete it after this command exits."
+            );
+            Ok(())
+        }
+        Err(err) => Err(err).with_context(|| format!("remove {}", dst.display())),
+    }
+}
+
+#[cfg(windows)]
+fn current_exe_matches(dst: &Path) -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    paths_match(&current, dst)
+}
+
+#[cfg(windows)]
+fn paths_match(a: &Path, b: &Path) -> bool {
+    let a = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
+    let b = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
+    a.to_string_lossy()
+        .eq_ignore_ascii_case(b.to_string_lossy().as_ref())
+}
+
+#[cfg(windows)]
+fn schedule_windows_self_delete(dst: &Path) -> Result<()> {
+    use std::{
+        os::windows::process::CommandExt,
+        process::{Command, Stdio},
+    };
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+    let literal = powershell_literal(dst);
+    let script = format!(
+        "$pidToWait = {}; \
+         try {{ Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue }} catch {{}}; \
+         Start-Sleep -Milliseconds 250; \
+         Remove-Item -LiteralPath {literal} -Force -ErrorAction SilentlyContinue; \
+         $dir = Split-Path -LiteralPath {literal}; \
+         if ($dir -and (Test-Path -LiteralPath $dir)) {{ \
+             $children = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue); \
+             if ($children.Count -eq 0) {{ \
+                 Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue \
+             }} \
+         }}",
+        std::process::id()
+    );
+
+    Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-WindowStyle",
+            "Hidden",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()
+        .context("schedule Windows self-removal")?;
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn powershell_literal(path: &Path) -> String {
+    let escaped = path.display().to_string().replace('\'', "''");
+    format!("'{escaped}'")
 }
 
 /// Where the installed binary should live.

@@ -195,6 +195,8 @@ A full-screen TUI (needs a real terminal). It has **two ways to drive it**:
 | y | sync now (bridge) |
 | l | toggle the log pane (live tail of the selected service) |
 | a | toggle combined logs from all running instances |
+| PgUp / PgDn | scroll service logs older / newer |
+| Home / End | jump to oldest / newest loaded service log lines |
 | ? | help overlay |
 | q / Esc | quit (restores the terminal cleanly) |
 
@@ -234,13 +236,18 @@ fbsy logs <instance> [-n 50] [--follow]   # tail a service log (follow = live)
 fbsy status <instance>                     # one service instance's status + log path
 fbsy close <instance>                      # stop an instance (SIGTERM + clear registry)
 ```
+Bridge service logs include sync lifecycle lines: device connection, pulled record count,
+mapped HRMS event count, forwarded count, clear/keep decision, and final sync result.
+Mock ZKTeco logs show protocol commands served; mock HRMS logs show request paths and
+webhook event counts. See `docs/LOGGING_CHECKLIST.md` for the full manual test checklist.
 
 ### Step 8 — Uninstall
 ```bash
 fbsy uninstall            # removes the binary, KEEPS ~/.config/fbsy
 ```
-Full wipe: also `rm -rf ~/.config/fbsy` and remove the `# added by fbsy install` line from
-your shell rc.
+Linux/macOS delete the installed binary immediately. Windows schedules removal after
+the command exits because a running `.exe` is locked by the OS. Full wipe: also remove
+the data directory and the PATH entry manually.
 
 ---
 
@@ -405,3 +412,4 @@ fbsy close bridge && fbsy close zkteco && fbsy close hrms   # stop everything
 fbsy uninstall                                                 # remove binary, keep data
 rm -rf ~/.config/fbsy                                          # full wipe (optional)
 ```
+On Windows, replace the last line with deleting `%APPDATA%\fbsy` after the command exits.

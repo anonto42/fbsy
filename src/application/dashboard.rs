@@ -47,6 +47,7 @@ struct App {
     selected: usize,
     show_logs: bool,
     all_logs: bool,
+    log_scroll: usize,
     show_help: bool,
     /// Some(view) while a captured CLI command's output overlay is open.
     output: Option<OutputView>,
@@ -66,6 +67,7 @@ impl App {
             selected: 0,
             show_logs: true,
             all_logs: false,
+            log_scroll: 0,
             show_help: false,
             output: None,
             pending_attach: None,
@@ -156,21 +158,43 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
             app.mode = Mode::Command;
             app.input.clear();
         }
-        KeyCode::Up | KeyCode::Char('k') => app.selected = app.selected.saturating_sub(1),
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.selected = app.selected.saturating_sub(1);
+            app.log_scroll = 0;
+        }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.selected + 1 < rows.len() {
                 app.selected += 1;
+                app.log_scroll = 0;
             }
         }
-        KeyCode::Char('l') => app.show_logs = !app.show_logs,
+        KeyCode::Char('l') => {
+            app.show_logs = !app.show_logs;
+            app.log_scroll = 0;
+        }
         KeyCode::Char('a') => {
             app.all_logs = !app.all_logs;
             app.show_logs = true;
+            app.log_scroll = 0;
             app.status = if app.all_logs {
                 "showing logs from all running instances".to_string()
             } else {
                 "showing selected instance logs".to_string()
             };
+        }
+        KeyCode::PageUp => {
+            app.show_logs = true;
+            app.log_scroll = app.log_scroll.saturating_add(10);
+        }
+        KeyCode::PageDown => {
+            app.log_scroll = app.log_scroll.saturating_sub(10);
+        }
+        KeyCode::Home => {
+            app.show_logs = true;
+            app.log_scroll = usize::MAX;
+        }
+        KeyCode::End => {
+            app.log_scroll = 0;
         }
         KeyCode::Char('s') => {
             if let Some(row) = rows.get(app.selected) {
@@ -290,6 +314,7 @@ fn execute_command(app: &mut App, line: &str) {
             {
                 Some(index) => {
                     app.selected = index;
+                    app.log_scroll = 0;
                     app.status = format!("selected {}", rows[index].name);
                 }
                 None => app.status = "usage: select <instance>|<kind>".to_string(),
@@ -299,6 +324,7 @@ fn execute_command(app: &mut App, line: &str) {
         "logs" if args.get(1).is_some_and(|arg| arg == "all") => {
             app.all_logs = true;
             app.show_logs = true;
+            app.log_scroll = 0;
             app.status = "showing logs: all running instances".to_string();
             return;
         }
@@ -590,6 +616,8 @@ fn draw_help(frame: &mut Frame, full: Rect) {
         row("y", "run a one-off sync now"),
         row("l", "toggle the log pane"),
         row("a", "toggle logs from ALL running instances"),
+        row("PgUp / PgDn", "scroll log pane older / newer"),
+        row("Home / End", "jump to oldest / newest log lines"),
         row("? / q", "this help / quit"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -765,9 +793,9 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
 }
 
 fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
-    let visible = area.height.saturating_sub(2) as usize;
+    let visible = area.height.saturating_sub(2).max(1) as usize;
     let lines = if app.all_logs {
-        service::tail_all_running(visible.max(1))
+        service::tail_all_running(LOG_TAIL)
     } else {
         let name = rows
             .get(app.selected)
@@ -776,20 +804,25 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
         let log_path = paths::service_log_path(name);
         service::tail_lines(&log_path, LOG_TAIL)
     };
-    let shown: Vec<Line> = lines
-        .iter()
-        .rev()
-        .take(visible.max(1))
-        .rev()
-        .map(|l| Line::from(l.clone()))
-        .collect();
 
-    let title = if app.all_logs {
-        " logs: all running instances ".to_string()
+    let (start, end, scroll, max_scroll) = log_window_bounds(lines.len(), visible, app.log_scroll);
+    let shown: Vec<Line> = if lines.is_empty() {
+        vec![Line::from(
+            "(no log output yet; start a service or run `fbsy logs <instance>`)",
+        )]
+    } else {
+        lines[start..end]
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect()
+    };
+
+    let title_base = if app.all_logs {
+        "logs: all running instances".to_string()
     } else {
         let row = rows.get(app.selected);
         format!(
-            " logs: {} ({}) ",
+            "logs: {} ({})",
             row.map(|r| r.name.as_str()).unwrap_or("bridge"),
             if row.map(|r| r.running).unwrap_or(false) {
                 "running"
@@ -798,8 +831,31 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
             }
         )
     };
+    let scroll_label = match (max_scroll, scroll) {
+        (0, _) => "newest".to_string(),
+        (_, 0) => format!("newest · {max_scroll} older lines available"),
+        (max, current) if current == max => format!("oldest · scroll {current}/{max}"),
+        (max, current) => format!("scroll {current}/{max}"),
+    };
+    let title = format!(" {title_base} · {scroll_label} · PgUp/PgDn Home/End ");
     let para = Paragraph::new(shown).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(para, area);
+}
+
+fn log_window_bounds(
+    line_count: usize,
+    visible: usize,
+    requested_scroll: usize,
+) -> (usize, usize, usize, usize) {
+    if line_count == 0 {
+        return (0, 0, 0, 0);
+    }
+    let visible = visible.max(1);
+    let max_scroll = line_count.saturating_sub(visible);
+    let scroll = requested_scroll.min(max_scroll);
+    let end = line_count.saturating_sub(scroll);
+    let start = end.saturating_sub(visible);
+    (start, end, scroll, max_scroll)
 }
 
 fn draw_palette(frame: &mut Frame, area: Rect) {
@@ -817,6 +873,7 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
     line1.extend(key("y", "sync"));
     line1.extend(key("l", "logs"));
     line1.extend(key("a", "all logs"));
+    line1.extend(key("PgUp/PgDn", "scroll logs"));
     line1.extend(key("?", "help"));
     line1.extend(key("q", "quit"));
 
@@ -881,7 +938,9 @@ fn row_by_name_or_kind<'a>(rows: &'a [ServiceStatus], name: &str) -> Option<&'a 
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_dashboard_alias, should_run_attached, split_command_line};
+    use super::{
+        expand_dashboard_alias, log_window_bounds, should_run_attached, split_command_line,
+    };
 
     #[test]
     fn command_line_splitter_keeps_quoted_paths_together() {
@@ -924,5 +983,17 @@ mod tests {
         assert!(should_run_attached(&["update".into()]));
         assert!(!should_run_attached(&["update".into(), "--check".into()]));
         assert!(!should_run_attached(&["show".into()]));
+    }
+
+    #[test]
+    fn log_window_defaults_to_newest_lines() {
+        assert_eq!(log_window_bounds(100, 10, 0), (90, 100, 0, 90));
+        assert_eq!(log_window_bounds(5, 10, 0), (0, 5, 0, 0));
+    }
+
+    #[test]
+    fn log_window_scrolls_older_and_clamps() {
+        assert_eq!(log_window_bounds(100, 10, 7), (83, 93, 7, 90));
+        assert_eq!(log_window_bounds(100, 10, usize::MAX), (0, 10, 90, 90));
     }
 }

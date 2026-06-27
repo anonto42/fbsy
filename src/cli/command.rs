@@ -15,6 +15,7 @@ pub enum Command {
     /// Install fbsy to a per-user bin dir and create data directories.
     Install,
     /// Remove the installed binary (data directories are left intact).
+    #[command(visible_aliases = ["unistall", "unistaill"])]
     Uninstall,
     /// Check for and install a newer release (restarts running services).
     Update(UpdateArgs),

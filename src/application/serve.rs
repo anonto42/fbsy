@@ -37,6 +37,38 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
         }
     }
 
+    println!("FingerBridge service starting");
+    println!("  Config: {}", path.display());
+    println!("  Devices: {}", cfg.devices.len());
+    for device in &cfg.devices {
+        println!(
+            "  Device {} -> {}:{} every {}s clearAfterSync={}",
+            device.device_code,
+            device.device_ip,
+            device.device_port,
+            device.sync_interval_seconds,
+            device.clear_attendance_after_sync
+        );
+    }
+    println!(
+        "  Job polling: {}",
+        if no_poll {
+            "disabled by --no-poll"
+        } else if cfg.hrms_base_url.is_some() {
+            "enabled"
+        } else {
+            "not configured"
+        }
+    );
+    println!(
+        "  Auto update: {}",
+        if cfg.auto_update {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
     let states = build_states(&cfg);
     start_boot_syncs(&states);
     start_schedulers(&states);
@@ -77,12 +109,15 @@ fn build_states(cfg: &BridgeConfig) -> Arc<Vec<Arc<DeviceSyncState>>> {
             .iter()
             .cloned()
             .map(|device| {
-                Arc::new(DeviceSyncState::new(
-                    device,
-                    cfg.vps_webhook_url.clone(),
-                    connector.clone(),
-                    hrms.clone(),
-                ))
+                Arc::new(
+                    DeviceSyncState::new(
+                        device,
+                        cfg.vps_webhook_url.clone(),
+                        connector.clone(),
+                        hrms.clone(),
+                    )
+                    .with_progress_logging(),
+                )
             })
             .collect(),
     )
@@ -91,6 +126,7 @@ fn build_states(cfg: &BridgeConfig) -> Arc<Vec<Arc<DeviceSyncState>>> {
 fn start_boot_syncs(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
     for state in states.iter() {
         let state = Arc::clone(state);
+        println!("bridge: scheduling boot sync for {}", state.device_code());
         thread::spawn(move || {
             let _ = state.sync_once();
         });
@@ -100,6 +136,11 @@ fn start_boot_syncs(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
 fn start_schedulers(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
     for state in states.iter() {
         let state = Arc::clone(state);
+        println!(
+            "bridge: scheduler started for {} every {}s",
+            state.device_code(),
+            state.sync_interval_seconds()
+        );
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(state.sync_interval_seconds()));
             let _ = state.sync_once();
@@ -181,7 +222,9 @@ fn handle_sync(
     query: &str,
 ) -> Result<()> {
     if let Some(code) = query.strip_prefix("device=") {
+        println!("http: manual sync requested for device {code}");
         let Some(state) = states.iter().find(|state| state.device_code() == code) else {
+            println!("http: manual sync rejected; device {code} not found");
             return write_json(
                 stream,
                 404,
@@ -189,6 +232,7 @@ fn handle_sync(
             );
         };
         if state.syncing() {
+            println!("http: manual sync rejected for {code}: already in progress");
             return write_json(
                 stream,
                 429,
@@ -199,6 +243,7 @@ fn handle_sync(
         thread::spawn(move || {
             let _ = state.sync_once();
         });
+        println!("http: manual sync accepted for device {code}");
         return write_json(
             stream,
             202,
@@ -206,6 +251,7 @@ fn handle_sync(
         );
     }
 
+    println!("http: manual sync requested for all devices");
     let mut started = Vec::new();
     let mut skipped = Vec::new();
     for state in states.iter() {
@@ -219,6 +265,11 @@ fn handle_sync(
             });
         }
     }
+    println!(
+        "http: manual sync accepted; started=[{}] skipped=[{}]",
+        started.join(", "),
+        skipped.join(", ")
+    );
     write_json(
         stream,
         202,

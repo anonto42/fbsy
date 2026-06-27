@@ -117,6 +117,12 @@ fn handle_device_client(
     mut stream: TcpStream,
     records: Arc<Mutex<Vec<RawAttendanceMock>>>,
 ) -> Result<()> {
+    let peer = stream
+        .peer_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| "unknown peer".to_string());
+    println!("mock-zkteco: client connected from {peer}");
+
     let mut session_id = 0;
 
     loop {
@@ -148,11 +154,15 @@ fn handle_device_client(
 
         if cmd == CMD_CONNECT {
             session_id = 12345;
+            println!("mock-zkteco: CMD_CONNECT -> session {session_id}");
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_GET_FREE_SIZES {
             // Return 20 × i32. Field [4] = users, [6] = fingers, [8] = records.
             let record_count = records.lock().unwrap().len() as i32;
+            println!(
+                "mock-zkteco: CMD_GET_FREE_SIZES -> users=1 templates=1 attendance={record_count}"
+            );
             let mut fields = [0i32; 20];
             fields[4] = 1; // one mock user
             fields[6] = 1; // one mock fingerprint template
@@ -161,6 +171,7 @@ fn handle_device_client(
             let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_GET_VERSION {
+            println!("mock-zkteco: CMD_GET_VERSION -> {MOCK_FIRMWARE}");
             let body = format!("{MOCK_FIRMWARE}\0");
             let reply = make_tcp_packet(CMD_ACK_OK, body.as_bytes(), session_id, reply_id);
             stream.write_all(&reply)?;
@@ -178,10 +189,12 @@ fn handle_device_client(
                 "~DeviceName" => MOCK_DEVICE_NAME,
                 _ => "",
             };
+            println!("mock-zkteco: CMD_OPTIONS_RRQ {name} -> {value}");
             let body = format!("{name}={value}\0");
             let reply = make_tcp_packet(CMD_ACK_OK, body.as_bytes(), session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_EXIT {
+            println!("mock-zkteco: CMD_EXIT");
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
             stream.write_all(&reply)?;
             break;
@@ -189,6 +202,10 @@ fn handle_device_client(
             let sub_cmd = if cmd_data.len() >= 2 { cmd_data[1] } else { 0 };
             if sub_cmd == CMD_ATTLOG_RRQ {
                 let list = records.lock().unwrap();
+                println!(
+                    "mock-zkteco: CMD_ATTLOG_RRQ -> {} attendance record(s)",
+                    list.len()
+                );
                 let mut record_bytes = Vec::new();
                 for r in list.iter() {
                     record_bytes.extend(r.uid.to_le_bytes());
@@ -205,6 +222,7 @@ fn handle_device_client(
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else if sub_cmd == CMD_USERTEMP_RRQ {
+                println!("mock-zkteco: CMD_USERTEMP_RRQ -> 1 user");
                 // One mock user (72-byte zk8 record): uid 1001, user_id "1001".
                 let user = mock_user_record(1001, "1001", "MockUser");
                 let payload = [
@@ -215,6 +233,7 @@ fn handle_device_client(
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else if sub_cmd == CMD_DB_RRQ {
+                println!("mock-zkteco: CMD_DB_RRQ -> 1 fingerprint template");
                 // One mock fingerprint template for uid 1001.
                 let rec = mock_template_record(1001, 0, &[0xAA, 0xBB, 0xCC, 0xDD]);
                 let payload =
@@ -222,6 +241,7 @@ fn handle_device_client(
                 let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
                 stream.write_all(&reply)?;
             } else {
+                println!("mock-zkteco: CMD_RWB unknown sub-command {sub_cmd}");
                 let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
                 stream.write_all(&reply)?;
             }
@@ -237,10 +257,12 @@ fn handle_device_client(
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
             stream.write_all(&reply)?;
         } else {
+            println!("mock-zkteco: unknown command {cmd} -> ACK");
             let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
             stream.write_all(&reply)?;
         }
     }
+    println!("mock-zkteco: client disconnected from {peer}");
     Ok(())
 }
 
@@ -366,39 +388,52 @@ fn handle_hrms_client(
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or_default();
     let (clean_path, _query) = path.split_once('?').unwrap_or((path, ""));
+    println!("mock-hrms: {method} {clean_path}");
 
-    if method == "POST" {
+    if method == "POST" && clean_path == "/webhook" {
         if let Some(body_start) = request.find("\r\n\r\n") {
             let body = &request[body_start + 4..];
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-                println!(
-                    "{} Received HRMS Event Payload:\n{}",
-                    style("➡").cyan().bold(),
-                    serde_json::to_string_pretty(&val).unwrap_or_default()
-                );
-                if let Ok(mut list) = received_events.lock() {
-                    list.push(val);
+            match serde_json::from_str::<serde_json::Value>(body) {
+                Ok(val) => {
+                    let event_count = webhook_event_count(&val);
+                    println!("mock-hrms: received webhook payload with {event_count} event(s)");
+                    println!(
+                        "{} Received HRMS Event Payload:\n{}",
+                        style("➡").cyan().bold(),
+                        serde_json::to_string_pretty(&val).unwrap_or_default()
+                    );
+                    if let Ok(mut list) = received_events.lock() {
+                        list.push(val);
+                        println!("mock-hrms: stored payload count is now {}", list.len());
+                    }
                 }
+                Err(err) => println!("mock-hrms: webhook JSON parse failed: {err}"),
             }
+        } else {
+            println!("mock-hrms: webhook request had no body");
         }
         let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
         stream.write_all(response.as_bytes())?;
     } else if method == "GET" && clean_path == "/events" {
         // Debug: return all received attendance events
         let list = received_events.lock().unwrap();
+        println!("mock-hrms: returning {} stored payload(s)", list.len());
         let body = serde_json::to_string_pretty(&*list)?;
         http_json(&mut stream, 200, &body)?;
     } else if method == "GET" && clean_path == "/reset" {
         // Debug: clear received events
         received_events.lock().unwrap().clear();
+        println!("mock-hrms: stored payloads reset");
         http_json(&mut stream, 200, r#"{"ok":true}"#)?;
     } else if method == "GET" && clean_path == "/health" {
+        println!("mock-hrms: health ok");
         http_json(&mut stream, 200, r#"{"ok":true,"agent":"mock-hrms"}"#)?;
     } else if method == "GET"
         && (clean_path.ends_with("/pending-jobs")
             || clean_path.contains("/biometric-devices/pending-jobs"))
     {
         // Job poller endpoint — return empty list so the poller runs without errors
+        println!("mock-hrms: returning 0 pending job(s)");
         let body = r#"{"statusCode":200,"message":"Success","data":[]}"#;
         http_json(&mut stream, 200, body)?;
     } else if method == "POST"
@@ -421,6 +456,15 @@ fn handle_hrms_client(
         http_json(&mut stream, 404, r#"{"ok":false,"message":"not found"}"#)?;
     }
     Ok(())
+}
+
+fn webhook_event_count(value: &serde_json::Value) -> usize {
+    value
+        .get("events")
+        .and_then(|events| events.as_array())
+        .map(Vec::len)
+        .or_else(|| value.as_array().map(Vec::len))
+        .unwrap_or(0)
 }
 
 fn http_json(stream: &mut TcpStream, status: u16, body: &str) -> Result<()> {

@@ -108,5 +108,12 @@ unique code, `mock-key` as the API key, and `1` as the organization ID.
 fbsy uninstall      # removes the installed binary; leaves ~/.config/fbsy intact
 ```
 
-> Touches: deletes the binary only. Remove `~/.config/fbsy` and the shell-rc PATH line
-> manually if you want a full wipe.
+What happens by OS:
+
+- Linux/macOS: deletes the installed binary immediately.
+- Windows: if `fbsy.exe` is uninstalling itself, Windows keeps the running executable
+  locked, so `fbsy` starts a tiny background PowerShell cleanup that removes the `.exe`
+  after the command exits.
+
+> Touches: deletes the binary only. It keeps the config/log/run data directory. Remove
+> the data directory and PATH entry manually if you want a full wipe.

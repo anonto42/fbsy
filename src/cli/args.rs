@@ -14,3 +14,20 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::cli::command::Command;
+
+    use super::Cli;
+
+    #[test]
+    fn uninstall_accepts_common_typo_aliases() {
+        for word in ["uninstall", "unistall", "unistaill"] {
+            let cli = Cli::parse_from(["fbsy", word]);
+            assert!(matches!(cli.command, Some(Command::Uninstall)));
+        }
+    }
+}
