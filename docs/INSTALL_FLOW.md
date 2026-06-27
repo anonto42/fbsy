@@ -81,6 +81,8 @@ fbsy run zkteco    # mock ZKTeco device on :4370 (serves fake attendance)
 Point `bridge`'s config at `127.0.0.1:8800` / `127.0.0.1:4370` when everything runs on
 one machine. For LAN testing from another machine, use the router/LAN address shown by
 `fbsy show`, such as `192.168.1.24:4370`.
+For the first mock device, the setup wizard can use `MOCK-GATE-01` as the device
+unique code, `mock-key` as the API key, and `1` as the organization ID.
 
 > Touches: starts background processes + registry files; no network beyond localhost.
 

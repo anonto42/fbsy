@@ -30,6 +30,14 @@ const CMD_ACK_OK: u16 = 2000;
 const CMD_DATA: u16 = 1501;
 const CMD_RWB: u16 = 1503;
 
+const MOCK_DEVICE_CODE: &str = "MOCK-GATE-01";
+const MOCK_API_KEY: &str = "mock-key";
+const MOCK_ORGANIZATION_ID: u64 = 1;
+const MOCK_SERIAL: &str = "MOCK-SN-0001";
+const MOCK_FIRMWARE: &str = "MockFW 6.60";
+const MOCK_PLATFORM: &str = "MOCK_PLATFORM";
+const MOCK_DEVICE_NAME: &str = "MockDevice";
+
 #[derive(Clone, Debug)]
 struct RawAttendanceMock {
     uid: u16,
@@ -49,6 +57,21 @@ pub fn run_device(port: u16, records_count: usize) -> Result<()> {
         style(records_count).yellow().bold()
     );
     println!("  Reachable from another LAN device at {display_addr}.");
+    println!();
+    println!("{}", style("  Setup wizard values").yellow().bold());
+    println!(
+        "  Device IP:                  {}",
+        network::lan_host_or_loopback()
+    );
+    println!("  Device port:                {port}");
+    println!("  Device unique code:         {MOCK_DEVICE_CODE}");
+    println!("  Device HRMS API key:        {MOCK_API_KEY}");
+    println!("  Organization ID:            {MOCK_ORGANIZATION_ID}");
+    println!("  Device connection password: 0");
+    println!("  Omit ICMP ping check:       yes");
+    println!("  Mock serial:                {MOCK_SERIAL}");
+    println!("  Mock firmware:              {MOCK_FIRMWARE}");
+    println!();
 
     // Pre-populate mock attendance records
     let now = Utc::now();
@@ -138,7 +161,8 @@ fn handle_device_client(
             let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_GET_VERSION {
-            let reply = make_tcp_packet(CMD_ACK_OK, b"MockFW 6.60\0", session_id, reply_id);
+            let body = format!("{MOCK_FIRMWARE}\0");
+            let reply = make_tcp_packet(CMD_ACK_OK, body.as_bytes(), session_id, reply_id);
             stream.write_all(&reply)?;
         } else if cmd == CMD_OPTIONS_RRQ {
             // cmd_data is the requested option name, e.g. "~SerialNumber\0".
@@ -149,9 +173,9 @@ fn handle_device_client(
                 .unwrap_or(cmd_data);
             let name = String::from_utf8_lossy(name);
             let value = match name.as_ref() {
-                "~SerialNumber" => "MOCK-SN-0001",
-                "~Platform" => "MOCK_PLATFORM",
-                "~DeviceName" => "MockDevice",
+                "~SerialNumber" => MOCK_SERIAL,
+                "~Platform" => MOCK_PLATFORM,
+                "~DeviceName" => MOCK_DEVICE_NAME,
                 _ => "",
             };
             let body = format!("{name}={value}\0");
@@ -301,6 +325,12 @@ pub fn run_hrms(port: u16) -> Result<()> {
         style(&display_url).cyan().bold()
     );
     println!("  Reachable from another LAN device at {display_url}/webhook.");
+    println!();
+    println!("{}", style("  Setup wizard values").yellow().bold());
+    println!("  HRMS Webhook URL: {display_url}/webhook");
+    println!("  HRMS Base URL:    {display_url}/api/v1");
+    println!("  API token:        blank is OK for mock job polling");
+    println!();
     println!("  POST  /webhook                         ← receives attendance events");
     println!("  GET   /api/v1/biometric-devices/pending-jobs ← returns [] (job poller)");
     println!("  POST  /api/v1/biometric-devices/jobs/*/complete ← job completion");

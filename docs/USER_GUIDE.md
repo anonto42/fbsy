@@ -105,6 +105,15 @@ fbsy close dev1
 `zkteco` and `hrms` services, for example `192.168.1.24:4370`. That is the address
 other machines/devices on the same router should use. On the same machine, `127.0.0.1`
 still works.
+The mock servers print a **Setup wizard values** block. For the first mock device,
+use:
+```text
+Device unique code:  MOCK-GATE-01
+Device HRMS API key: mock-key
+Organization ID:    1
+```
+`deviceCode` is not a hardware serial number. It is the identifier that FingerBridge
+sends to HRMS so HRMS knows which configured biometric device produced the attendance.
 Each prints `✔ <svc> started (pid …)` and writes `run/<svc>.json`, e.g.:
 ```json
 { "service": "hrms", "kind": "hrms", "pid": 5517, "port": 8800,

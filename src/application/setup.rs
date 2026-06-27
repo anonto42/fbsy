@@ -15,7 +15,7 @@ use dialoguer::{Confirm, Input};
 
 use crate::{
     config::{BridgeConfig, BridgeDeviceConfig},
-    support::paths::default_config_path,
+    support::{network, paths::default_config_path},
 };
 
 /// Run the interactive setup wizard.
@@ -68,8 +68,21 @@ pub fn run_at(path: PathBuf) -> Result<()> {
 }
 
 fn collect_config() -> Result<BridgeConfig> {
+    let lan_host = network::lan_host_or_loopback();
+    println!("{}", style("Tip for mock testing:").yellow().bold());
+    println!(
+        "  If you started {} and {}, the defaults below should work.",
+        style("fbsy run hrms").cyan(),
+        style("fbsy run zkteco").cyan()
+    );
+    println!(
+        "  A device unique code is an HRMS/bridge identifier you choose, not the ZKTeco serial."
+    );
+    println!();
+
     let vps_webhook_url: String = Input::new()
         .with_prompt("HRMS Webhook URL")
+        .default(format!("http://{lan_host}:8800/webhook"))
         .validate_with(|input: &String| {
             if input.trim().starts_with("http://") || input.trim().starts_with("https://") {
                 Ok(())
@@ -92,6 +105,7 @@ fn collect_config() -> Result<BridgeConfig> {
     let (hrms_base_url, hrms_api_token, job_poll_interval_seconds) = if enable_jobs {
         let base: String = Input::new()
             .with_prompt("HRMS Base URL")
+            .default(format!("http://{lan_host}:8800/api/v1"))
             .validate_with(|input: &String| {
                 if input.trim().starts_with("http://") || input.trim().starts_with("https://") {
                     Ok(())
@@ -160,8 +174,13 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         style(format!("--- Device {number} ---")).bold().cyan()
     );
 
+    let lan_host = network::lan_host_or_loopback();
+    let default_code = mock_device_code(number);
+    let default_key = mock_api_key(number);
+
     let device_ip: String = Input::new()
         .with_prompt("Device IP")
+        .default(lan_host)
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("Device IP is required")
@@ -204,7 +223,8 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         .interact()?;
 
     let device_code: String = Input::new()
-        .with_prompt("Device unique code")
+        .with_prompt("Device unique code (choose this; mock default is OK)")
+        .default(default_code)
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("Device code is required")
@@ -215,7 +235,8 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         .interact_text()?;
 
     let api_key: String = Input::new()
-        .with_prompt("Device HRMS API key")
+        .with_prompt("Device HRMS API key (mock default is OK)")
+        .default(default_key)
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("API key is required")
@@ -262,6 +283,18 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
     })
 }
 
+fn mock_device_code(number: usize) -> String {
+    format!("MOCK-GATE-{number:02}")
+}
+
+fn mock_api_key(number: usize) -> String {
+    if number == 1 {
+        "mock-key".to_string()
+    } else {
+        format!("mock-key-{number:02}")
+    }
+}
+
 fn backup_existing_config(path: &Path) -> Result<Option<PathBuf>> {
     if !path.exists() {
         return Ok(None);
@@ -297,7 +330,7 @@ fn save_config_atomically(path: &Path, cfg: &BridgeConfig) -> Result<()> {
 mod tests {
     use std::fs;
 
-    use super::{backup_existing_config, save_config_atomically};
+    use super::{backup_existing_config, mock_api_key, mock_device_code, save_config_atomically};
 
     #[test]
     fn atomic_save_writes_pretty_json() {
@@ -338,5 +371,13 @@ mod tests {
 
         assert!(backup.exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mock_defaults_are_predictable_for_setup() {
+        assert_eq!(mock_device_code(1), "MOCK-GATE-01");
+        assert_eq!(mock_device_code(2), "MOCK-GATE-02");
+        assert_eq!(mock_api_key(1), "mock-key");
+        assert_eq!(mock_api_key(2), "mock-key-02");
     }
 }
