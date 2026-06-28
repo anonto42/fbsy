@@ -52,6 +52,17 @@ pub fn update_dir() -> PathBuf {
     base_dir().join("update")
 }
 
+/// Directory holding per-device persistent state (last sync result, etc.).
+pub fn state_dir() -> PathBuf {
+    base_dir().join("state")
+}
+
+/// Atomically persisted last-sync-result file for one device.
+/// Path: `state/<device_code>.last-result.json`
+pub fn device_last_result_path(device_code: &str) -> PathBuf {
+    state_dir().join(format!("{device_code}.last-result.json"))
+}
+
 /// Default config path used by CLI commands.
 pub fn default_config_path() -> PathBuf {
     config_dir().join("config.json")
@@ -67,9 +78,9 @@ pub fn service_registry_path(service: &str) -> PathBuf {
     run_dir().join(format!("{service}.json"))
 }
 
-/// Create base/config/log/run directories (idempotent).
+/// Create base/config/log/run/state directories (idempotent).
 pub fn ensure_dirs() -> Result<()> {
-    for dir in [config_dir(), log_dir(), run_dir()] {
+    for dir in [config_dir(), log_dir(), run_dir(), state_dir()] {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("create directory {}", dir.display()))?;
     }

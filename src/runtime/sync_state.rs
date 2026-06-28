@@ -13,7 +13,10 @@ use crate::{
         device::{DeviceClient, DeviceConnector},
         hrms::HrmsClient,
     },
-    support::log::{self, Level},
+    support::{
+        log::{self, Level},
+        paths,
+    },
 };
 
 /// Runtime state for one configured device.
@@ -34,6 +37,7 @@ impl DeviceSyncState {
         connector: Arc<dyn DeviceConnector>,
         hrms: Arc<dyn HrmsClient>,
     ) -> Self {
+        let persisted = load_last_result(&device.device_code);
         Self {
             device,
             webhook_url,
@@ -41,7 +45,7 @@ impl DeviceSyncState {
             hrms,
             log_progress: false,
             lock: Mutex::new(()),
-            last_result: Mutex::new(None),
+            last_result: Mutex::new(persisted),
         }
     }
 
@@ -263,12 +267,37 @@ impl DeviceSyncState {
         if let Ok(mut last) = self.last_result.lock() {
             *last = Some(result.clone());
         }
+        save_last_result(&self.device.device_code, &result);
         result
     }
 
     fn log(&self, level: Level, args: std::fmt::Arguments<'_>) {
         if self.log_progress {
             log::event(level, &format!("sync {}", self.device.device_code), args);
+        }
+    }
+}
+
+/// Read the persisted last-sync result for a device from disk. Returns `None`
+/// if the file is absent or unparseable (treated as "no prior sync known").
+pub fn load_last_result(device_code: &str) -> Option<SyncResult> {
+    let path = paths::device_last_result_path(device_code);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<SyncResult>(&raw).ok()
+}
+
+/// Atomically persist the last-sync result for a device. Failures are
+/// best-effort: a missing write does not break the sync — the in-memory value
+/// is still authoritative while the bridge is running.
+fn save_last_result(device_code: &str, result: &SyncResult) {
+    let path = paths::device_last_result_path(device_code);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if let Ok(body) = serde_json::to_string_pretty(result) {
+        if std::fs::write(&tmp, format!("{body}\n")).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
         }
     }
 }
@@ -286,4 +315,49 @@ fn sanitize(message: &str, device: &BridgeDeviceConfig) -> String {
         s.push_str("...");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn temp_result(code: &str) -> SyncResult {
+        SyncResult {
+            ok: true,
+            device_code: code.to_string(),
+            pulled: 3,
+            forwarded: 3,
+            device_attendance_cleared: false,
+            started_at: "2026-06-01T10:00:00Z".to_string(),
+            message: "forwarded 3 event(s)".to_string(),
+        }
+    }
+
+    #[test]
+    fn round_trip_last_result() {
+        let dir = TempDir::new().unwrap();
+        let code = "TEST01";
+        let result = temp_result(code);
+
+        let path = dir.path().join(format!("{code}.last-result.json"));
+        let tmp = path.with_extension("json.tmp");
+        let body = serde_json::to_string_pretty(&result).unwrap();
+        std::fs::write(&tmp, format!("{body}\n")).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let loaded: SyncResult = serde_json::from_str(&raw).unwrap();
+        assert_eq!(loaded.device_code, code);
+        assert_eq!(loaded.pulled, 3);
+        assert_eq!(loaded.forwarded, 3);
+        assert!(loaded.ok);
+        assert_eq!(loaded.started_at, "2026-06-01T10:00:00Z");
+    }
+
+    #[test]
+    fn load_last_result_returns_none_for_missing_file() {
+        let result = load_last_result("NONEXISTENT_DEVICE_CODE_XYZ");
+        assert!(result.is_none());
+    }
 }

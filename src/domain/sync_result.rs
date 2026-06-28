@@ -1,8 +1,8 @@
 //! Result shape returned by one sync attempt.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// User/API-facing summary of a sync run.
 pub struct SyncResult {

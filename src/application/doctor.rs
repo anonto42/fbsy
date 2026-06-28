@@ -18,7 +18,9 @@ use crate::{
     },
     application::service,
     config::{BridgeConfig, BridgeDeviceConfig},
+    domain::SyncResult,
     ports::{config_store::ConfigStore, device::DeviceConnector, hrms::HrmsClient},
+    runtime::sync_state::load_last_result,
     support::paths::{default_config_path, log_dir},
 };
 
@@ -255,6 +257,7 @@ fn build_device_report(
         device_port: device.device_port,
         sync_interval_seconds: device.sync_interval_seconds,
         clear_attendance_after_sync: device.clear_attendance_after_sync,
+        last_sync: load_last_result(&device.device_code),
         device_connection: None,
         webhook: None,
     };
@@ -387,6 +390,17 @@ fn print_report(report: &DoctorReport) {
             "  Clear after sync: {}",
             enabled_styled(device.clear_attendance_after_sync)
         );
+        if let Some(sync) = &device.last_sync {
+            let status = if sync.ok {
+                style("ok").green().bold().to_string()
+            } else {
+                style("failed").red().bold().to_string()
+            };
+            println!(
+                "  Last sync: {} at {} — pulled {} forwarded {} — {}",
+                status, sync.started_at, sync.pulled, sync.forwarded, sync.message
+            );
+        }
         if let Some(check) = &device.device_connection {
             println!("  Device connection: {}", check.display_styled());
         }
@@ -447,6 +461,8 @@ struct DeviceDoctorReport {
     device_port: u16,
     sync_interval_seconds: u64,
     clear_attendance_after_sync: bool,
+    /// Last sync result loaded from disk (survives bridge restarts).
+    last_sync: Option<SyncResult>,
     device_connection: Option<CheckResult>,
     webhook: Option<CheckResult>,
 }
