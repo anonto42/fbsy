@@ -4,6 +4,7 @@
 //! dependency-light.
 
 pub mod log;
+pub mod log_rotation;
 pub mod network;
 pub mod paths;
 pub mod redaction;

@@ -23,7 +23,7 @@ use crate::{
         registry::{self, RegistryEntry},
     },
     services::ServiceKind,
-    support::{network, paths},
+    support::{log_rotation, network, paths},
 };
 
 // ── Parent side: `fbsy run <service>` ─────────────────────────────────────────
@@ -154,8 +154,14 @@ pub fn spawn_service_with_exe(
     }
 
     let log = paths::service_log_path(name);
+
+    // Inject the log path so the child can self-manage log rotation.
+    let mut augmented = args.to_vec();
+    augmented.push("--log-path".to_string());
+    augmented.push(log.display().to_string());
+
     // The child runs the KIND's loop; the registry/log are keyed by the instance.
-    let pid = process::spawn_detached_with_exe(exe, kind.name(), args, &log)?;
+    let pid = process::spawn_detached_with_exe(exe, kind.name(), &augmented, &log)?;
 
     // Confirm the child stayed alive (it would exit fast on, e.g., a port clash).
     std::thread::sleep(Duration::from_millis(300));
@@ -281,21 +287,27 @@ fn start_detached(kind: ServiceKind, name: &str, port: Option<u16>, args: &[Stri
 
 /// Entry point of the detached child: run the actual blocking server loop.
 pub fn exec_internal(service: &str, rest: &[String]) -> Result<()> {
+    // Extract --log-path (injected by spawn_service_with_exe) and start rotation.
+    let (log_path, rest) = extract_log_path(rest);
+    if let Some(path) = log_path {
+        log_rotation::spawn_rotation_thread(path);
+    }
+
     match ServiceKind::from_name(service) {
         Some(ServiceKind::Zkteco) => {
-            let (port, records) = parse_zkteco(rest);
+            let (port, records) = parse_zkteco(&rest);
             application::test_server::run_device(port, records)
         }
         Some(ServiceKind::Hrms) => {
-            let port = parse_hrms(rest);
+            let port = parse_hrms(&rest);
             application::test_server::run_hrms(port)
         }
         Some(ServiceKind::AtBridge) => {
-            let (config, interval, no_poll) = parse_bridge(rest);
+            let (config, interval, no_poll) = parse_bridge(&rest);
             application::serve::run(interval, no_poll, config)
         }
         Some(ServiceKind::Scanner) => {
-            let (interval, opts) = parse_scanner(rest);
+            let (interval, opts) = parse_scanner(&rest);
             application::scanner::run_service(opts, interval)
         }
         None => bail!("unknown service '{service}'"),
@@ -825,4 +837,24 @@ fn parse_scanner(rest: &[String]) -> (u64, application::scanner::ScanOptions) {
         }
     }
     (interval, opts)
+}
+
+/// Extract and remove the `--log-path <value>` injected by [`spawn_service_with_exe`].
+/// Returns `(path, remaining_args)`. Used by [`exec_internal`] to start log rotation.
+fn extract_log_path(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let mut path = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--log-path" {
+            if let Some(val) = args.get(i + 1) {
+                path = Some(std::path::PathBuf::from(val));
+                i += 2;
+                continue;
+            }
+        }
+        rest.push(args[i].clone());
+        i += 1;
+    }
+    (path, rest)
 }
