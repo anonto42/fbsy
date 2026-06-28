@@ -277,29 +277,77 @@ fn launch_detached_updater() -> Result<()> {
     .map(|_| ())
 }
 
+/// Maximum bytes read for the request headers. Prevents slow-read / large-header attacks.
+const MAX_HEADER_BYTES: usize = 8192;
+
+/// Read until `\r\n\r\n` or EOF, capped at `MAX_HEADER_BYTES`.
+/// Returns `None` if the header section exceeds the cap (→ 400).
+fn read_headers(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
+    let mut buf = [0u8; 1];
+    let mut headers = Vec::with_capacity(512);
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                headers.push(buf[0]);
+                if headers.len() > MAX_HEADER_BYTES {
+                    return Ok(None); // too large
+                }
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(Some(headers))
+}
+
 fn handle_client(
     mut stream: TcpStream,
     states: Arc<Vec<Arc<DeviceSyncState>>>,
     webhook_url: String,
 ) -> Result<()> {
-    let mut buffer = [0u8; 8192];
-    let read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let request_line = request.lines().next().unwrap_or_default();
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let target = parts.next().unwrap_or("/");
+    let Some(raw) = read_headers(&mut stream)? else {
+        write_error(&mut stream, 400, "request headers too large")?;
+        return Ok(());
+    };
+
+    // Parse request line only — we do not need body for any current endpoint.
+    let header_text = String::from_utf8_lossy(&raw);
+    let mut lines = header_text.lines();
+    let request_line = lines.next().unwrap_or_default();
+
+    let mut parts = request_line.split_ascii_whitespace();
+    let method = match parts.next() {
+        Some(m) if m.len() <= 16 => m,
+        _ => {
+            write_error(&mut stream, 400, "malformed request line")?;
+            return Ok(());
+        }
+    };
+    let target = match parts.next() {
+        Some(t) if t.starts_with('/') && t.len() <= 256 => t,
+        _ => {
+            write_error(&mut stream, 400, "malformed request target")?;
+            return Ok(());
+        }
+    };
+    // HTTP version field must look like HTTP/x.y; missing is tolerated for curl -0 style.
+    if let Some(version) = parts.next() {
+        if !version.starts_with("HTTP/") {
+            write_error(&mut stream, 400, "malformed HTTP version")?;
+            return Ok(());
+        }
+    }
+
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
     match (method, path) {
         ("GET", "/health") => write_json(&mut stream, 200, &health_body(&states, &webhook_url)),
         ("POST", "/sync") => handle_sync(&mut stream, &states, query),
         ("OPTIONS", _) => write_options(&mut stream),
-        _ => write_json(
-            &mut stream,
-            404,
-            &serde_json::json!({ "error": "not found" }),
-        ),
+        _ => write_error(&mut stream, 404, "not found"),
     }
 }
 
@@ -433,11 +481,16 @@ fn write_options(stream: &mut TcpStream) -> Result<()> {
     Ok(())
 }
 
+fn write_error(stream: &mut TcpStream, status: u16, message: &str) -> Result<()> {
+    write_json(stream, status, &serde_json::json!({ "error": message }))
+}
+
 fn write_json<T: Serialize>(stream: &mut TcpStream, status: u16, body: &T) -> Result<()> {
     let status_text = match status {
         200 => "OK",
         202 => "Accepted",
         204 => "No Content",
+        400 => "Bad Request",
         404 => "Not Found",
         429 => "Too Many Requests",
         _ => "OK",
