@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Run cargo audit
-        uses: rustsec/audit-check@37a4941e1da90a97bcffe0a30899d6c4ea7d95ab  # v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -91,15 +91,13 @@ jobs:
           restore-keys: ${{ runner.os }}-coverage-
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a249d42d6  # cargo-llvm-cov@0.6.16
-        with:
-          tool: cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
 
       - name: Generate coverage report
         run: cargo llvm-cov --all --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24  # v4.7.3
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24  # v5.4.3
         with:
           files: lcov.info
           fail_ci_if_error: false   # non-blocking: coverage is a signal, not a gate
