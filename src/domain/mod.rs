@@ -9,6 +9,9 @@ pub mod sync_result;
 pub mod template;
 
 pub use attendance::RawAttendance;
-pub use event::{event_type_from_punch, parse_timestamp, to_hrms_events, HrmsEvent};
+pub use event::{
+    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset, to_hrms_events,
+    HrmsEvent,
+};
 pub use sync_result::SyncResult;
 pub use template::{DeviceUser, FingerTemplate, FingerTemplatePayload};

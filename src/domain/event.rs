@@ -1,6 +1,6 @@
 //! Conversion from device attendance records to HRMS webhook events.
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use super::RawAttendance;
@@ -19,11 +19,63 @@ pub struct HrmsEvent {
     pub verification_method: String,
 }
 
-/// Parse a device timestamp into the ISO string sent to HRMS.
+/// Parse a configured device timezone string into a fixed UTC offset.
 ///
-/// The Python bridge treats naive device timestamps as UTC. We preserve that
-/// behavior until real-device timezone handling is confirmed.
-pub fn parse_timestamp(value: &str) -> Option<String> {
+/// ZKTeco devices report **naive** wall-clock timestamps with no offset, so the
+/// bridge must be told which offset that wall-clock is in to map a punch onto the
+/// correct calendar instant. Accepted forms (case-insensitive):
+///
+/// - empty / `UTC` / `Z` → `+00:00`
+/// - `+06:00`, `-05:30`, `+0600`, `-0530`, `+06`, `-05`
+///
+/// Returns `None` if the string cannot be understood (the caller treats that as a
+/// validation error). DST-aware IANA zones are intentionally not supported here to
+/// keep the bridge dependency-light; fixed-offset deployments are the target.
+pub fn parse_utc_offset(value: &str) -> Option<FixedOffset> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("utc")
+        || trimmed.eq_ignore_ascii_case("z")
+    {
+        return FixedOffset::east_opt(0);
+    }
+
+    let (sign, rest) = match trimmed.as_bytes().first()? {
+        b'+' => (1, &trimmed[1..]),
+        b'-' => (-1, &trimmed[1..]),
+        _ => return None,
+    };
+
+    // Accept "HH", "HHMM", "HH:MM".
+    let (hours_str, minutes_str) = if let Some((h, m)) = rest.split_once(':') {
+        (h, m)
+    } else if rest.len() <= 2 {
+        (rest, "0")
+    } else if rest.len() == 4 {
+        (&rest[..2], &rest[2..])
+    } else {
+        return None;
+    };
+
+    let hours: i32 = hours_str.parse().ok()?;
+    let minutes: i32 = minutes_str.parse().ok()?;
+    if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
+        return None;
+    }
+
+    FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))
+}
+
+/// The UTC offset used when a device has no configured timezone.
+pub fn default_utc_offset() -> FixedOffset {
+    FixedOffset::east_opt(0).expect("zero offset is always valid")
+}
+
+/// Parse a device timestamp into the offset-aware ISO string sent to HRMS.
+///
+/// Naive device timestamps are interpreted as wall-clock time in `offset` (the
+/// device's configured timezone). Timestamps that already carry an offset keep it.
+pub fn parse_timestamp(value: &str, offset: FixedOffset) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
         return None;
@@ -33,7 +85,12 @@ pub fn parse_timestamp(value: &str) -> Option<String> {
         return Some(timestamp.to_rfc3339());
     }
 
-    parse_naive_timestamp(value).map(|timestamp| Utc.from_utc_datetime(&timestamp).to_rfc3339())
+    parse_naive_timestamp(value).and_then(|naive| {
+        offset
+            .from_local_datetime(&naive)
+            .single()
+            .map(|dt| dt.to_rfc3339())
+    })
 }
 
 /// Map ZKTeco punch codes into the HRMS event vocabulary.
@@ -46,11 +103,11 @@ pub fn event_type_from_punch(punch: i64) -> &'static str {
     }
 }
 
-/// Convert raw device records into sorted HRMS events.
-pub fn to_hrms_events(records: &[RawAttendance]) -> Vec<HrmsEvent> {
+/// Convert raw device records into sorted HRMS events using the device's offset.
+pub fn to_hrms_events(records: &[RawAttendance], offset: FixedOffset) -> Vec<HrmsEvent> {
     let mut events = records
         .iter()
-        .filter_map(to_hrms_event)
+        .filter_map(|record| to_hrms_event(record, offset))
         .collect::<Vec<HrmsEvent>>();
 
     // Stable chronological ordering makes webhook behavior predictable.
@@ -58,7 +115,7 @@ pub fn to_hrms_events(records: &[RawAttendance]) -> Vec<HrmsEvent> {
     events
 }
 
-fn to_hrms_event(record: &RawAttendance) -> Option<HrmsEvent> {
+fn to_hrms_event(record: &RawAttendance, offset: FixedOffset) -> Option<HrmsEvent> {
     let device_employee_id = record.user_id.trim();
     if device_employee_id.is_empty() {
         return None;
@@ -66,7 +123,7 @@ fn to_hrms_event(record: &RawAttendance) -> Option<HrmsEvent> {
 
     Some(HrmsEvent {
         device_employee_id: device_employee_id.to_string(),
-        timestamp: parse_timestamp(&record.timestamp)?,
+        timestamp: parse_timestamp(&record.timestamp, offset)?,
         event_type: event_type_from_punch(record.punch).to_string(),
         verification_method: "fingerbridge".to_string(),
     })
@@ -84,6 +141,3 @@ fn parse_naive_timestamp(value: &str) -> Option<NaiveDateTime> {
         .iter()
         .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
 }
-
-#[allow(dead_code)]
-fn _fixed_offset_type_marker(_: DateTime<FixedOffset>) {}

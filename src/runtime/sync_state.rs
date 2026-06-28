@@ -156,7 +156,7 @@ impl DeviceSyncState {
             }
         };
 
-        let events = to_hrms_events(&attendance);
+        let events = to_hrms_events(&attendance, self.device.utc_offset());
         self.log(
             Level::Info,
             format_args!(

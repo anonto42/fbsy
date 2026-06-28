@@ -222,6 +222,26 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         .default(true)
         .interact()?;
 
+    let device_timezone: String = Input::new()
+        .with_prompt("Device timezone offset (UTC or e.g. +06:00; the device's clock zone)")
+        .default("UTC".to_string())
+        .validate_with(|input: &String| {
+            if crate::domain::parse_utc_offset(input).is_some() {
+                Ok(())
+            } else {
+                Err("Must be UTC or a fixed offset like +06:00")
+            }
+        })
+        .interact_text()?;
+    let device_timezone = {
+        let trimmed = device_timezone.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("utc") {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+
     let device_code: String = Input::new()
         .with_prompt("Device unique code (choose this; mock default is OK)")
         .default(default_code)
@@ -275,6 +295,7 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         device_timeout,
         device_force_udp,
         device_omit_ping,
+        device_timezone,
         device_code: device_code.trim().to_string(),
         api_key: api_key.trim().to_string(),
         organization_id,

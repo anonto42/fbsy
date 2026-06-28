@@ -45,6 +45,10 @@ pub struct BridgeDeviceConfig {
     pub device_force_udp: bool,
     /// Whether the device adapter should skip ping before connecting.
     pub device_omit_ping: bool,
+    /// Fixed UTC offset the device's naive timestamps are in (e.g. `+06:00`).
+    /// `None` means UTC, preserving the legacy Python-bridge behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_timezone: Option<String>,
     /// HRMS device identifier used by the webhook.
     pub device_code: String,
     /// Shared webhook secret. This must never be logged raw.
@@ -80,6 +84,8 @@ pub struct RedactedBridgeDeviceConfig {
     pub device_timeout: u64,
     pub device_force_udp: bool,
     pub device_omit_ping: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_timezone: Option<String>,
     pub device_code: String,
     pub api_key: String,
     pub organization_id: u64,

@@ -210,6 +210,7 @@ mod tests {
             device_timeout: 15,
             device_force_udp: false,
             device_omit_ping: true,
+            device_timezone: None,
             device_code: "GATE-01".to_string(),
             api_key: "device-key".to_string(),
             organization_id: 1,

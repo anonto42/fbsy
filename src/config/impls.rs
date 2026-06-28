@@ -4,8 +4,10 @@
 
 use std::collections::HashSet;
 
+use chrono::FixedOffset;
 use serde_json::{Map, Value};
 
+use crate::domain::{default_utc_offset, parse_utc_offset};
 use crate::support::redaction::redact;
 
 use super::{
@@ -141,12 +143,24 @@ impl BridgeDeviceConfig {
             device_timeout: self.device_timeout,
             device_force_udp: self.device_force_udp,
             device_omit_ping: self.device_omit_ping,
+            device_timezone: self.device_timezone.clone(),
             device_code: redact(&self.device_code),
             api_key: redact(&self.api_key),
             organization_id: self.organization_id,
             sync_interval_seconds: self.sync_interval_seconds,
             clear_attendance_after_sync: self.clear_attendance_after_sync,
         }
+    }
+
+    /// Fixed UTC offset that this device's naive timestamps are in.
+    ///
+    /// Falls back to UTC when no (or an unparseable) `deviceTimezone` is set;
+    /// `validate` rejects unparseable values before runtime ever sees them.
+    pub fn utc_offset(&self) -> FixedOffset {
+        self.device_timezone
+            .as_deref()
+            .and_then(parse_utc_offset)
+            .unwrap_or_else(default_utc_offset)
     }
 
     /// Validate one device entry after defaults have been applied.
@@ -174,6 +188,13 @@ impl BridgeDeviceConfig {
             return Err(ConfigError::Invalid(format!(
                 "{prefix}syncIntervalSeconds must be at least 5"
             )));
+        }
+        if let Some(timezone) = self.device_timezone.as_deref() {
+            if parse_utc_offset(timezone).is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "{prefix}deviceTimezone must be UTC or a fixed offset like +06:00 (got '{timezone}')"
+                )));
+            }
         }
         Ok(())
     }
@@ -226,6 +247,8 @@ fn parse_device_from_object(
             "deviceOmitPing",
             context,
         )?,
+        device_timezone: optional_trimmed_string(object, "deviceTimezone")
+            .filter(|value| !value.is_empty()),
         device_code: required_string(object, "deviceCode", context)?,
         api_key: required_string(object, "apiKey", context)?,
         organization_id: u64_from_value(

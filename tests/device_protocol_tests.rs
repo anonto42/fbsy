@@ -20,6 +20,7 @@ fn device_cfg(port: u16) -> BridgeDeviceConfig {
         device_timeout: 5,
         device_force_udp: false,
         device_omit_ping: true,
+        device_timezone: None,
         device_code: "MOCK".to_string(),
         api_key: "k".to_string(),
         organization_id: 1,

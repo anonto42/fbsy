@@ -21,6 +21,7 @@ fn device_config(clear_attendance_after_sync: bool) -> BridgeDeviceConfig {
         device_timeout: 15,
         device_force_udp: false,
         device_omit_ping: true,
+        device_timezone: None,
         device_code: "DEVICE-1".to_string(),
         api_key: "secret-key".to_string(),
         organization_id: 1,

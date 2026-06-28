@@ -1,5 +1,17 @@
-use fingerbridge::domain::{event_type_from_punch, parse_timestamp, to_hrms_events, RawAttendance};
+use chrono::FixedOffset;
+use fingerbridge::domain::{
+    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset, to_hrms_events,
+    RawAttendance,
+};
 use serde_json::json;
+
+fn utc() -> FixedOffset {
+    default_utc_offset()
+}
+
+fn plus_six() -> FixedOffset {
+    parse_utc_offset("+06:00").expect("offset parses")
+}
 
 #[test]
 fn punch_codes_match_python_bridge_behavior() {
@@ -10,46 +22,72 @@ fn punch_codes_match_python_bridge_behavior() {
 }
 
 #[test]
-fn naive_timestamp_is_treated_as_utc_for_python_parity() {
-    let parsed = parse_timestamp("2026-05-21T10:15:00").expect("timestamp parses");
+fn naive_timestamp_uses_utc_when_no_offset_configured() {
+    let parsed = parse_timestamp("2026-05-21T10:15:00", utc()).expect("timestamp parses");
     assert_eq!(parsed, "2026-05-21T10:15:00+00:00");
 }
 
 #[test]
-fn aware_timestamp_keeps_its_offset() {
-    let parsed = parse_timestamp("2026-05-21T12:00:00+06:00").expect("timestamp parses");
+fn naive_timestamp_uses_configured_device_offset() {
+    // A device in +06:00 reporting 10:15 wall-clock is 10:15+06:00, not 10:15Z.
+    let parsed = parse_timestamp("2026-05-21T10:15:00", plus_six()).expect("timestamp parses");
+    assert_eq!(parsed, "2026-05-21T10:15:00+06:00");
+}
+
+#[test]
+fn aware_timestamp_keeps_its_offset_regardless_of_config() {
+    let parsed = parse_timestamp("2026-05-21T12:00:00+06:00", utc()).expect("timestamp parses");
     assert_eq!(parsed, "2026-05-21T12:00:00+06:00");
 }
 
 #[test]
 fn invalid_timestamp_returns_none() {
-    assert_eq!(parse_timestamp("not-a-date"), None);
+    assert_eq!(parse_timestamp("not-a-date", utc()), None);
+}
+
+#[test]
+fn utc_offset_parser_accepts_common_forms() {
+    assert_eq!(parse_utc_offset(""), Some(utc()));
+    assert_eq!(parse_utc_offset("UTC"), Some(utc()));
+    assert_eq!(parse_utc_offset("Z"), Some(utc()));
+    assert_eq!(parse_utc_offset("+06:00"), FixedOffset::east_opt(6 * 3600));
+    assert_eq!(parse_utc_offset("+0600"), FixedOffset::east_opt(6 * 3600));
+    assert_eq!(parse_utc_offset("+06"), FixedOffset::east_opt(6 * 3600));
+    assert_eq!(
+        parse_utc_offset("-05:30"),
+        FixedOffset::east_opt(-(5 * 3600 + 30 * 60))
+    );
+    assert_eq!(parse_utc_offset("garbage"), None);
+    assert_eq!(parse_utc_offset("+25:00"), None);
 }
 
 #[test]
 fn hrms_events_skip_malformed_records_and_sort_by_timestamp() {
-    let events = to_hrms_events(&[
-        RawAttendance {
-            user_id: "42".to_string(),
-            timestamp: "2026-05-21T10:20:00".to_string(),
-            punch: 1,
-        },
-        RawAttendance {
-            user_id: "".to_string(),
-            timestamp: "2026-05-21T10:10:00".to_string(),
-            punch: 0,
-        },
-        RawAttendance {
-            user_id: "11".to_string(),
-            timestamp: "not-a-date".to_string(),
-            punch: 0,
-        },
-        RawAttendance {
-            user_id: "7".to_string(),
-            timestamp: "2026-05-21T10:05:00".to_string(),
-            punch: 0,
-        },
-    ]);
+    let events = to_hrms_events(
+        &[
+            RawAttendance {
+                user_id: "42".to_string(),
+                timestamp: "2026-05-21T10:20:00".to_string(),
+                punch: 1,
+            },
+            RawAttendance {
+                user_id: "".to_string(),
+                timestamp: "2026-05-21T10:10:00".to_string(),
+                punch: 0,
+            },
+            RawAttendance {
+                user_id: "11".to_string(),
+                timestamp: "not-a-date".to_string(),
+                punch: 0,
+            },
+            RawAttendance {
+                user_id: "7".to_string(),
+                timestamp: "2026-05-21T10:05:00".to_string(),
+                punch: 0,
+            },
+        ],
+        utc(),
+    );
 
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].device_employee_id, "7");
@@ -60,11 +98,14 @@ fn hrms_events_skip_malformed_records_and_sort_by_timestamp() {
 
 #[test]
 fn event_serializes_to_exact_hrms_field_names() {
-    let event = to_hrms_events(&[RawAttendance {
-        user_id: "001".to_string(),
-        timestamp: "2026-06-25T02:30:00Z".to_string(),
-        punch: 0,
-    }])
+    let event = to_hrms_events(
+        &[RawAttendance {
+            user_id: "001".to_string(),
+            timestamp: "2026-06-25T02:30:00Z".to_string(),
+            punch: 0,
+        }],
+        utc(),
+    )
     .into_iter()
     .next()
     .expect("event");

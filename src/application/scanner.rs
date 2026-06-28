@@ -227,6 +227,7 @@ fn scan_one(opts: &ScanOptions, ip: Ipv4Addr) -> Option<ScanFinding> {
         device_timeout: opts.device_timeout_secs.max(1),
         device_force_udp: opts.force_udp,
         device_omit_ping: true,
+        device_timezone: None,
         device_code: suggested_device_code(None, ip),
         api_key: String::new(),
         organization_id: 1,
