@@ -3,7 +3,10 @@
 //! This adapter supports HTTPS through rustls, request batching, response
 //! envelope parsing, and the retry policy inherited from the Python bridge.
 
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -17,6 +20,8 @@ use crate::{
 
 const MAX_RETRIES: usize = 3;
 const RETRY_BACKOFF_SECONDS: u64 = 2;
+/// Maximum jitter added to each retry delay (milliseconds).
+const RETRY_JITTER_MS: u64 = 500;
 
 #[derive(Debug, Clone)]
 /// HTTPS-capable HRMS webhook client.
@@ -139,11 +144,14 @@ impl ReqwestHrmsClient {
                 Ok(value) => return Ok(value),
                 Err(PostFailure::NonRetryable(message)) => return Err(HrmsError::Message(message)),
                 Err(PostFailure::Retryable(message)) if attempt <= MAX_RETRIES => {
-                    let wait_seconds = RETRY_BACKOFF_SECONDS * attempt as u64;
+                    let base_ms = RETRY_BACKOFF_SECONDS * attempt as u64 * 1000;
+                    let jitter_ms = jitter(RETRY_JITTER_MS);
+                    let wait = Duration::from_millis(base_ms + jitter_ms);
                     eprintln!(
-                        "HRMS webhook failed: {message} - retry {attempt}/{MAX_RETRIES} in {wait_seconds}s"
+                        "HRMS webhook failed: {message} - retry {attempt}/{MAX_RETRIES} in {:.1}s",
+                        wait.as_secs_f64()
                     );
-                    thread::sleep(Duration::from_secs(wait_seconds));
+                    thread::sleep(wait);
                 }
                 Err(PostFailure::Retryable(message)) => return Err(HrmsError::Message(message)),
             }
@@ -273,6 +281,19 @@ fn truncate_error(mut message: String) -> String {
     message
 }
 
+/// Return a pseudo-random jitter in `0..max_ms` using wall-clock nanoseconds
+/// as entropy. No external `rand` dependency needed for this small range.
+fn jitter(max_ms: u64) -> u64 {
+    if max_ms == 0 {
+        return 0;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    u64::from(nanos) % max_ms
+}
+
 fn should_retry_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
 }
@@ -287,7 +308,20 @@ enum PostFailure {
 mod tests {
     use serde_json::json;
 
-    use super::{parse_jobs_response, parse_received, should_retry_status, JobCompletion};
+    use super::{jitter, parse_jobs_response, parse_received, should_retry_status, JobCompletion};
+
+    #[test]
+    fn jitter_is_bounded() {
+        for max in [0u64, 1, 100, 500, 1000] {
+            let j = jitter(max);
+            assert!(j < max.max(1), "jitter({max}) = {j} should be < max");
+        }
+    }
+
+    #[test]
+    fn jitter_zero_max_returns_zero() {
+        assert_eq!(jitter(0), 0);
+    }
 
     #[test]
     fn retry_policy_matches_bridge_contract() {

@@ -279,6 +279,23 @@ curl -X POST http://127.0.0.1:7431/sync
 
 ---
 
+## Non-functional requirements (NFRs)
+
+These are measurable targets, not aspirations. They define "good enough" for a production office deployment.
+
+| NFR | Target | Notes |
+|---|---|---|
+| **Binary size** | ≤ 15 MB stripped | Statically linked musl; no JVM/Python runtime |
+| **Memory** | ≤ 50 MB RSS after 7-day soak | Thread-per-device; no heap growth by design |
+| **Sync p99 latency** | ≤ 10 s per device | Network + ZKTeco protocol round-trips dominate |
+| **RPO (data loss)** | Zero | Safety invariant: clear only after confirmed upload |
+| **Availability** | Self-healing via service restart; survives reboot with OS autostart | |
+| **Webhook retry** | 3 retries; exponential backoff (2 s × attempt) + up to 500 ms jitter | Retries 429 and 5xx; never retries 4xx |
+| **Log disk usage** | Capped; rotates at 5 MB, keeps 5 files per service | Unbounded growth prevented |
+| **HTTP API** | Loopback-only (127.0.0.1); max 8 KB headers; 400 on malformed | No auth needed at loopback |
+
+---
+
 ## How data flows
 
 ```
@@ -368,6 +385,7 @@ Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODE
 
 | Document | What it covers |
 |---|---|
+| [**PRODUCTION_PLAN.md**](docs/PRODUCTION_PLAN.md) | **Production build plan & cold-handoff spec** — invariants, current state, gap analysis, and an ordered, executable checklist to reach production-grade. Start here to continue the project. |
 | [USER_GUIDE.md](docs/USER_GUIDE.md) | Full first-user manual: install, every command, and how each piece works technically |
 | [INSTALL_FLOW.md](docs/INSTALL_FLOW.md) | End-to-end install → setup → run → dashboard lifecycle |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer diagram, module responsibilities |
