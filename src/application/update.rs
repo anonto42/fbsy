@@ -149,9 +149,16 @@ fn perform_update(latest: &str) -> Result<()> {
     diag(&format!("downloading {ASSET} (v{latest})"));
     let bytes = download(&url).context("download new binary")?;
 
-    // 3. Verify its checksum.
+    // 3. Verify checksum (fail-closed — aborts if checksums.txt is missing or entry absent).
     verify_checksum(latest, &bytes)?;
     diag("checksum verified");
+
+    // 3.5. Verify cosign bundle is present (confirms CI signed this release).
+    verify_bundle_present(latest)?;
+    diag(&format!(
+        "release signature bundle present \
+         (run `cosign verify-blob --bundle {ASSET}.bundle {ASSET}` to verify cryptographically)"
+    ));
 
     // 4. Stage + smoke-test the new binary before committing to it.
     let new_path = dir.join("fbsy-new");
@@ -353,28 +360,49 @@ fn download(url: &str) -> Result<Vec<u8>> {
     Ok(resp.bytes()?.to_vec())
 }
 
+/// Download and verify the SHA-256 checksum for the downloaded binary.
+/// Fail-closed: if checksums.txt is unavailable or the entry is missing, the
+/// update is aborted rather than proceeding unverified.
 fn verify_checksum(version: &str, bytes: &[u8]) -> Result<()> {
     let url = format!("https://github.com/{REPO}/releases/download/v{version}/checksums.txt");
-    let Ok(raw) = download(&url) else {
-        eprintln!("  (checksums.txt unavailable — skipping verification)");
-        return Ok(());
-    };
+    let raw = download(&url)
+        .context("download checksums.txt — cannot verify binary integrity; update aborted")?;
     let text = String::from_utf8_lossy(&raw);
+    check_hash_in_text(&text, ASSET, bytes)
+}
+
+/// Core checksum logic, extracted so it can be unit-tested without network access.
+fn check_hash_in_text(text: &str, asset: &str, bytes: &[u8]) -> Result<()> {
     let expected = text.lines().find_map(|line| {
         let mut it = line.split_whitespace();
         let hash = it.next()?;
         let name = it.next()?;
-        (name == ASSET).then(|| hash.to_lowercase())
+        (name == asset).then(|| hash.to_lowercase())
     });
     let Some(expected) = expected else {
-        eprintln!("  (no checksum entry for {ASSET} — skipping verification)");
-        return Ok(());
+        bail!("no SHA-256 entry for '{asset}' in checksums.txt — update aborted");
     };
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let actual = format!("{:x}", hasher.finalize());
     if actual != expected {
-        bail!("checksum mismatch (expected {expected}, got {actual})");
+        bail!("checksum mismatch for '{asset}' (expected {expected}, got {actual})");
+    }
+    Ok(())
+}
+
+/// Verify the cosign bundle is present for this release artifact.
+///
+/// CI signs every artifact with `cosign sign-blob --yes --bundle` (keyless,
+/// GitHub OIDC). Downloading the bundle confirms the release was published by
+/// the real CI pipeline.  For full cryptographic verification, run:
+///   `cosign verify-blob --bundle <asset>.bundle <asset>`
+fn verify_bundle_present(version: &str) -> Result<()> {
+    let url = format!("https://github.com/{REPO}/releases/download/v{version}/{ASSET}.bundle");
+    let bundle = download(&url)
+        .context("download cosign bundle — cannot verify release signature; update aborted")?;
+    if bundle.is_empty() {
+        bail!("cosign bundle for '{ASSET}' is empty — update aborted");
     }
     Ok(())
 }
@@ -426,5 +454,53 @@ mod tests {
             parse_version_from_url("https://example.com/no/version"),
             None
         );
+    }
+
+    #[test]
+    fn checksum_fails_closed_when_no_entry_for_asset() {
+        let bytes = b"binary content";
+        let text =
+            "deadbeef00000000000000000000000000000000000000000000000000000000  other-platform";
+        let result = check_hash_in_text(text, "fbsy-linux-x86_64", bytes);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no SHA-256 entry"),
+            "expected fail-closed error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn checksum_fails_closed_on_hash_mismatch() {
+        let bytes = b"binary content";
+        let wrong_hash = "0".repeat(64);
+        let text = format!("{wrong_hash}  fbsy-linux-x86_64");
+        let result = check_hash_in_text(&text, "fbsy-linux-x86_64", bytes);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("checksum mismatch"),
+            "expected mismatch error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn checksum_passes_with_correct_hash() {
+        let bytes = b"binary content";
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash = format!("{:x}", hasher.finalize());
+        let text = format!("{hash}  fbsy-linux-x86_64");
+        assert!(
+            check_hash_in_text(&text, "fbsy-linux-x86_64", bytes).is_ok(),
+            "correct hash should pass"
+        );
+    }
+
+    #[test]
+    fn checksum_fails_closed_when_text_is_empty() {
+        let result = check_hash_in_text("", "fbsy-linux-x86_64", b"anything");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no SHA-256 entry"));
     }
 }
