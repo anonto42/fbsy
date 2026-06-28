@@ -862,3 +862,121 @@ fn parse_option_value(data: &[u8]) -> Option<String> {
     let value = s.split_once('=').map(|(_, v)| v).unwrap_or(s.as_str());
     Some(value.trim().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feed arbitrary byte slices into the decoders and verify they never panic.
+    /// This is a deterministic fuzz harness: fixed seeds cover empty, tiny,
+    /// malformed, and large inputs without requiring nightly cargo-fuzz.
+    fn fuzz_attendance(payload: &[u8], count: usize) {
+        // Must not panic — any error is fine.
+        let _ = decode_attendance_data(payload, count);
+    }
+
+    fn fuzz_users(payload: &[u8], count: usize) {
+        let _ = decode_users(payload, count);
+    }
+
+    fn fuzz_templates(payload: &[u8], user_map: &std::collections::HashMap<u32, (String, String)>) {
+        let _ = decode_templates(payload, user_map);
+    }
+
+    #[test]
+    fn decode_attendance_empty_payload() {
+        fuzz_attendance(&[], 0);
+        fuzz_attendance(&[], 10);
+    }
+
+    #[test]
+    fn decode_attendance_truncated_header() {
+        fuzz_attendance(&[0x01, 0x02, 0x03], 1);
+    }
+
+    #[test]
+    fn decode_attendance_all_zeros() {
+        fuzz_attendance(&[0u8; 64], 3);
+    }
+
+    #[test]
+    fn decode_attendance_all_ones() {
+        fuzz_attendance(&[0xFFu8; 256], 5);
+    }
+
+    #[test]
+    fn decode_attendance_size_larger_than_payload() {
+        // Declare 10 000 bytes but only provide 8.
+        let mut payload = vec![0u8; 8];
+        payload[0..4].copy_from_slice(&10000u32.to_le_bytes());
+        fuzz_attendance(&payload, 1);
+    }
+
+    #[test]
+    fn decode_attendance_zero_record_count_with_data() {
+        let mut payload = vec![0u8; 44];
+        payload[0..4].copy_from_slice(&40u32.to_le_bytes());
+        fuzz_attendance(&payload, 0);
+    }
+
+    #[test]
+    fn decode_attendance_implausible_count() {
+        fuzz_attendance(&[0u8; 512], usize::MAX);
+    }
+
+    #[test]
+    fn decode_users_empty_payload() {
+        fuzz_users(&[], 0);
+        fuzz_users(&[], 5);
+    }
+
+    #[test]
+    fn decode_users_truncated() {
+        fuzz_users(&[0x01, 0x02], 1);
+    }
+
+    #[test]
+    fn decode_users_all_ff() {
+        fuzz_users(&[0xFFu8; 128], 2);
+    }
+
+    #[test]
+    fn decode_users_count_larger_than_data() {
+        fuzz_users(&[0u8; 72], 1000);
+    }
+
+    #[test]
+    fn decode_templates_empty() {
+        let map = std::collections::HashMap::new();
+        fuzz_templates(&[], &map);
+    }
+
+    #[test]
+    fn decode_templates_truncated_header() {
+        let map = std::collections::HashMap::new();
+        fuzz_templates(&[0x01, 0x02, 0x03], &map);
+    }
+
+    #[test]
+    fn decode_templates_all_zeros() {
+        let map = std::collections::HashMap::new();
+        fuzz_templates(&[0u8; 256], &map);
+    }
+
+    #[test]
+    fn decode_templates_size_overflow() {
+        // table_size declared as 0xFFFFFFFF — must not panic.
+        let mut payload = vec![0u8; 16];
+        payload[0..4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        let map = std::collections::HashMap::new();
+        fuzz_templates(&payload, &map);
+    }
+
+    #[test]
+    fn decode_templates_with_valid_user_map() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(1u32, ("uid1".to_string(), "Alice".to_string()));
+        // Payload too short to contain a real template — should return empty, not panic.
+        fuzz_templates(&[0u8; 8], &map);
+    }
+}

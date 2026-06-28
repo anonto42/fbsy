@@ -303,7 +303,7 @@ fn read_headers(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(headers))
 }
 
-fn handle_client(
+pub fn handle_client(
     mut stream: TcpStream,
     states: Arc<Vec<Arc<DeviceSyncState>>>,
     webhook_url: String,
