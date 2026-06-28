@@ -2,18 +2,51 @@
 //!
 //! Starts the local HTTP API and per-device schedulers. This implementation is
 //! intentionally blocking and dependency-light so mock-device testing works now.
+//!
+//! # Graceful shutdown
+//!
+//! A SIGTERM or SIGINT handler sets the `SHUTDOWN` flag. The accept loop polls
+//! it every 200 ms (non-blocking accept). Schedulers break between sleep slices.
+//! After the loop, the main thread waits up to 30 s for any in-flight syncs to
+//! complete before returning (which causes the process to exit cleanly).
 
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use serde::Serialize;
+
+// ── Graceful-shutdown flag ────────────────────────────────────────────────────
+
+/// Set by the SIGTERM/SIGINT handler. Checked by the accept loop and schedulers.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+fn shutting_down() -> bool {
+    SHUTDOWN.load(Ordering::SeqCst)
+}
+
+/// Install SIGTERM and SIGINT handlers that flip `SHUTDOWN`.
+/// No-op on non-Unix targets (Windows receives TerminateProcess which cannot
+/// be caught here; the non-blocking loop still exits cleanly on process kill).
+fn install_signal_handlers() {
+    #[cfg(unix)]
+    unsafe {
+        extern "C" fn on_signal(_: libc::c_int) {
+            SHUTDOWN.store(true, Ordering::SeqCst);
+        }
+        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
+    }
+}
 
 use crate::{
     adapters::{
@@ -79,25 +112,53 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
         start_auto_updater(cfg.update_check_interval_hours);
     }
 
+    install_signal_handlers();
+
     let address = format!("127.0.0.1:{}", cfg.bridge_port);
     let listener = TcpListener::bind(&address)?;
+    listener.set_nonblocking(true)?;
+
     println!("FingerBridge serving on http://{address}");
     println!("  GET  /health");
     println!("  POST /sync");
     println!("  POST /sync?device=CODE");
+    log::info("http", format_args!("listening on http://{address}"));
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    loop {
+        if shutting_down() {
+            log::info(
+                "shutdown",
+                format_args!("shutdown signal received — stopping HTTP loop"),
+            );
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let _ = stream.set_nonblocking(false); // handle_client uses blocking reads
                 let states = Arc::clone(&states);
                 let webhook_url = cfg.vps_webhook_url.clone();
                 thread::spawn(move || {
                     let _ = handle_client(stream, states, webhook_url);
                 });
             }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(200));
+            }
             Err(err) => log::error("http", format_args!("accept failed: {err}")),
         }
     }
+
+    // Wait for in-flight syncs to finish (safety invariant: never cut a sync
+    // mid-upload, because the device-clear comes after a successful HRMS send).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let any_syncing = states.iter().any(|s| s.syncing());
+        if !any_syncing || Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    log::info("shutdown", format_args!("shutdown complete"));
     Ok(())
 }
 
@@ -147,9 +208,26 @@ fn start_schedulers(states: &Arc<Vec<Arc<DeviceSyncState>>>) {
                 state.sync_interval_seconds()
             ),
         );
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(state.sync_interval_seconds()));
-            let _ = state.sync_once();
+        thread::spawn(move || {
+            loop {
+                // Sleep in 1 s slices so the scheduler notices a shutdown signal
+                // without waiting up to a full sync interval.
+                let interval = state.sync_interval_seconds();
+                for _ in 0..interval {
+                    if shutting_down() {
+                        log::info(
+                            "sched",
+                            format_args!("scheduler stopped for {}", state.device_code()),
+                        );
+                        return;
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                }
+                if shutting_down() {
+                    return;
+                }
+                let _ = state.sync_once();
+            }
         });
     }
 }
