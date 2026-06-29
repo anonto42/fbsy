@@ -14,8 +14,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use console::style;
+use dialoguer::Confirm;
 
-use crate::{application::service, services::ServiceKind, support::paths};
+use crate::{
+    adapters::config_file::JsonConfigStore,
+    application::{self, service},
+    config::ConfigError,
+    ports::config_store::ConfigStore,
+    services::ServiceKind,
+    support::paths,
+};
 
 /// Whether a boot unit is installed for an instance.
 pub struct AutostartStatus {
@@ -44,7 +52,12 @@ pub fn enable(name: &str, config: Option<PathBuf>) -> Result<()> {
         // Resolve paths as the *real* user here (correct), and print the exact
         // elevated command with --config baked in so the privileged run is
         // unambiguous regardless of which account it lands in.
+        paths::ensure_dirs()?;
+        let _ = paths::migrate_legacy_config();
         let cfg = absolute(&config.unwrap_or_else(paths::default_config_path));
+        if kind == ServiceKind::AtBridge {
+            ensure_bridge_config_ready(&cfg)?;
+        }
         print_elevation_hint(&exe, name, &cfg);
         bail!("administrator privileges are required to install a boot service");
     }
@@ -221,6 +234,57 @@ fn absolute(path: &Path) -> PathBuf {
     std::env::current_dir()
         .map(|cwd| cwd.join(path))
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn ensure_bridge_config_ready(path: &Path) -> Result<()> {
+    let store = JsonConfigStore;
+    match store.load(path) {
+        Ok(_) => {
+            println!(
+                "{} Config is valid: {}",
+                style("✔").green().bold(),
+                style(path.display()).yellow()
+            );
+            Ok(())
+        }
+        Err(ConfigError::NotFound(_)) => {
+            println!(
+                "{} No config found at {}",
+                style("!").yellow().bold(),
+                style(path.display()).cyan()
+            );
+            let run_setup = Confirm::new()
+                .with_prompt("Run the setup wizard now?")
+                .default(true)
+                .interact()
+                .unwrap_or(false);
+            if !run_setup {
+                println!(
+                    "Run {} when ready, then enable boot auto-start again.",
+                    style("fbsy bridge config setup").cyan()
+                );
+                bail!("bridge config is required before enabling boot auto-start");
+            }
+
+            application::setup::run_at(path.to_path_buf())?;
+            store
+                .load(path)
+                .map(|_| ())
+                .context("validate config after setup")
+        }
+        Err(err) => {
+            eprintln!(
+                "{} Config is not valid: {}",
+                style("!").yellow().bold(),
+                err
+            );
+            eprintln!(
+                "Run {} after fixing it.",
+                style("fbsy bridge config validate").cyan()
+            );
+            bail!("bridge config must be valid before enabling boot auto-start");
+        }
+    }
 }
 
 // ── Platform: elevation, install, remove, status ──────────────────────────────
