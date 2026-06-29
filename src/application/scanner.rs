@@ -429,9 +429,7 @@ fn probe_http(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFinding
             .set_write_timeout(Some(timeout))
             .map_err(|e| e.to_string())?;
 
-        let request = format!(
-            "GET / HTTP/1.0\r\nHost: {ip}\r\nConnection: close\r\n\r\n"
-        );
+        let request = format!("GET / HTTP/1.0\r\nHost: {ip}\r\nConnection: close\r\n\r\n");
         stream
             .write_all(request.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -455,7 +453,10 @@ fn probe_http(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFinding
             if line.is_empty() {
                 break; // End of headers.
             }
-            if let Some(val) = line.strip_prefix("Server: ").or_else(|| line.strip_prefix("server: ")) {
+            if let Some(val) = line
+                .strip_prefix("Server: ")
+                .or_else(|| line.strip_prefix("server: "))
+            {
                 server_header = Some(val.chars().take(80).collect());
             }
             // Only read headers (max ~30 lines for safety).
@@ -579,9 +580,7 @@ fn probe_redis(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFindin
         stream
             .set_write_timeout(Some(timeout))
             .map_err(|e| e.to_string())?;
-        stream
-            .write_all(b"PING\r\n")
-            .map_err(|e| e.to_string())?;
+        stream.write_all(b"PING\r\n").map_err(|e| e.to_string())?;
         let mut buf = [0u8; 64];
         let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
         let resp = String::from_utf8_lossy(&buf[..n]);
@@ -809,9 +808,7 @@ fn print_findings(findings: &[ScanFinding]) {
             "http" | "https" | "http-dev" | "http-alt" | "https-alt" | "fbsy-bridge"
             | "fbsy-hrms" => style(&finding.service_type).cyan().to_string(),
             "ssh" => style(&finding.service_type).blue().to_string(),
-            "redis" | "mysql" | "postgresql" => {
-                style(&finding.service_type).magenta().to_string()
-            }
+            "redis" | "mysql" | "postgresql" => style(&finding.service_type).magenta().to_string(),
             _ => style(&finding.service_type).yellow().to_string(),
         };
 
@@ -868,10 +865,7 @@ fn print_findings(findings: &[ScanFinding]) {
                     .yellow()
                     .bold()
             );
-            println!(
-                "{}",
-                serde_json::to_string_pretty(cfg).unwrap_or_default()
-            );
+            println!("{}", serde_json::to_string_pretty(cfg).unwrap_or_default());
         }
     }
     println!();

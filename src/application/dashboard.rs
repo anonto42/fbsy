@@ -711,7 +711,12 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
     let row = |k: &str, d: &'static str| {
         Line::from(vec![Span::styled(format!("  {k:<26}"), cyan), d.into()])
     };
-    let separator = || Line::from(vec![Span::styled("  ────────────────────────────────────────────────────────────────────────", dim)]);
+    let separator = || {
+        Line::from(vec![Span::styled(
+            "  ────────────────────────────────────────────────────────────────────────",
+            dim,
+        )])
+    };
 
     let lines = vec![
         Line::from(vec![Span::styled(" Single-key shortcuts", yellow)]),
@@ -860,14 +865,15 @@ fn draw_title(frame: &mut Frame, area: Rect, rows: &[ServiceStatus]) {
     // Simple right-alignment padding logic
     let left_len: usize = line.iter().map(|s| s.width()).sum();
     let right_len: usize = right.iter().map(|s| s.width()).sum();
-    let space = area.width.saturating_sub(left_len as u16 + right_len as u16 + 2); // +2 for borders
+    let space = area
+        .width
+        .saturating_sub(left_len as u16 + right_len as u16 + 2); // +2 for borders
     if space > 0 {
         line.push(Span::raw(" ".repeat(space as usize)));
     }
     line.extend(right);
 
-    let title = Paragraph::new(Line::from(line))
-        .block(Block::default().borders(Borders::ALL));
+    let title = Paragraph::new(Line::from(line)).block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, area);
 }
 
@@ -1012,7 +1018,7 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
             }
         )
     };
-    
+
     let scroll_label = if max_scroll == 0 {
         "".to_string()
     } else if scroll == 0 {
@@ -1097,13 +1103,19 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
 
     let line = match app.mode {
         Mode::Command => Line::from(vec![
-            Span::styled(mode_str, Style::default().bg(mode_color).fg(Color::Black).bold()),
+            Span::styled(
+                mode_str,
+                Style::default().bg(mode_color).fg(Color::Black).bold(),
+            ),
             Span::styled(" :", Style::default().fg(Color::Yellow).bold()),
             Span::raw(app.input.clone()),
             Span::styled("█", Style::default().fg(Color::Yellow)),
         ]),
         Mode::Normal => Line::from(vec![
-            Span::styled(mode_str, Style::default().bg(mode_color).fg(Color::White).bold()),
+            Span::styled(
+                mode_str,
+                Style::default().bg(mode_color).fg(Color::White).bold(),
+            ),
             Span::styled("  ", Style::default().dim()),
             Span::styled(app.status.clone(), Style::default().fg(Color::Yellow)),
         ]),
