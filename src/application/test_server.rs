@@ -28,6 +28,7 @@ const CMD_ATTLOG_RRQ: u8 = 13;
 const CMD_CLEAR_ATTLOG: u16 = 15;
 const CMD_ACK_OK: u16 = 2000;
 const CMD_DATA: u16 = 1501;
+const CMD_READ_BUFFER: u16 = 1504;
 const CMD_RWB: u16 = 1503;
 
 const MOCK_DEVICE_CODE: &str = "MOCK-GATE-01";
@@ -45,8 +46,28 @@ struct RawAttendanceMock {
     punch: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum BufferMode {
+    InlineData,
+    AckPrepare,
+}
+
 /// Run a mock ZKTeco device server speaking raw TCP protocol.
 pub fn run_device(port: u16, records_count: usize) -> Result<()> {
+    run_device_with_buffer_mode(port, records_count, BufferMode::InlineData)
+}
+
+/// Run a mock device that returns ACK_OK for CMD_PREPARE_BUFFER, matching
+/// F22 firmware that prepares data successfully without using CMD_PREPARE_DATA.
+pub fn run_device_ack_prepare(port: u16, records_count: usize) -> Result<()> {
+    run_device_with_buffer_mode(port, records_count, BufferMode::AckPrepare)
+}
+
+fn run_device_with_buffer_mode(
+    port: u16,
+    records_count: usize,
+    buffer_mode: BufferMode,
+) -> Result<()> {
     let bind_addr = format!("0.0.0.0:{port}");
     let display_addr = format!("{}:{port}", network::lan_host_or_loopback());
     let listener = TcpListener::bind(&bind_addr)?;
@@ -104,7 +125,7 @@ pub fn run_device(port: u16, records_count: usize) -> Result<()> {
             Ok(stream) => {
                 let records = Arc::clone(&records);
                 thread::spawn(move || {
-                    let _ = handle_device_client(stream, records);
+                    let _ = handle_device_client(stream, records, buffer_mode);
                 });
             }
             Err(err) => eprintln!("Device client accept failed: {err}"),
@@ -116,6 +137,7 @@ pub fn run_device(port: u16, records_count: usize) -> Result<()> {
 fn handle_device_client(
     mut stream: TcpStream,
     records: Arc<Mutex<Vec<RawAttendanceMock>>>,
+    buffer_mode: BufferMode,
 ) -> Result<()> {
     let peer = stream
         .peer_addr()
@@ -223,8 +245,7 @@ fn handle_device_client(
                     record_bytes.as_slice(),
                 ]
                 .concat();
-                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
-                stream.write_all(&reply)?;
+                write_buffer_response(&mut stream, &payload, session_id, reply_id, buffer_mode)?;
             } else if sub_cmd == CMD_USERTEMP_RRQ {
                 log::info("device", format_args!("CMD_USERTEMP_RRQ -> 1 user"));
                 // One mock user (72-byte zk8 record): uid 1001, user_id "1001".
@@ -234,8 +255,7 @@ fn handle_device_client(
                     user.as_slice(),
                 ]
                 .concat();
-                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
-                stream.write_all(&reply)?;
+                write_buffer_response(&mut stream, &payload, session_id, reply_id, buffer_mode)?;
             } else if sub_cmd == CMD_DB_RRQ {
                 log::info(
                     "device",
@@ -245,8 +265,7 @@ fn handle_device_client(
                 let rec = mock_template_record(1001, 0, &[0xAA, 0xBB, 0xCC, 0xDD]);
                 let payload =
                     [(rec.len() as u32).to_le_bytes().as_slice(), rec.as_slice()].concat();
-                let reply = make_tcp_packet(CMD_DATA, &payload, session_id, reply_id);
-                stream.write_all(&reply)?;
+                write_buffer_response(&mut stream, &payload, session_id, reply_id, buffer_mode)?;
             } else {
                 log::warn(
                     "device",
@@ -255,6 +274,28 @@ fn handle_device_client(
                 let reply = make_tcp_packet(CMD_ACK_OK, &[], session_id, reply_id);
                 stream.write_all(&reply)?;
             }
+        } else if cmd == CMD_READ_BUFFER {
+            let start = if cmd_data.len() >= 4 {
+                i32::from_le_bytes([cmd_data[0], cmd_data[1], cmd_data[2], cmd_data[3]]).max(0)
+                    as usize
+            } else {
+                0
+            };
+            let size = if cmd_data.len() >= 8 {
+                i32::from_le_bytes([cmd_data[4], cmd_data[5], cmd_data[6], cmd_data[7]]).max(0)
+                    as usize
+            } else {
+                0
+            };
+            let payload = current_attendance_payload(&records);
+            let end = (start + size).min(payload.len());
+            let chunk = if start < payload.len() {
+                &payload[start..end]
+            } else {
+                &[]
+            };
+            let reply = make_tcp_packet(CMD_DATA, chunk, session_id, reply_id);
+            stream.write_all(&reply)?;
         } else if cmd == CMD_CLEAR_ATTLOG {
             if let Ok(mut list) = records.lock() {
                 log::info(
@@ -272,6 +313,47 @@ fn handle_device_client(
         }
     }
     log::info("device", format_args!("client disconnected from {peer}"));
+    Ok(())
+}
+
+fn current_attendance_payload(records: &Arc<Mutex<Vec<RawAttendanceMock>>>) -> Vec<u8> {
+    let list = records.lock().unwrap();
+    let mut record_bytes = Vec::new();
+    for r in list.iter() {
+        record_bytes.extend(r.uid.to_le_bytes());
+        record_bytes.push(1); // status (1)
+        record_bytes.extend(r.timestamp.to_le_bytes());
+        record_bytes.push(r.punch);
+    }
+    let declared_size = record_bytes.len() as u32;
+    [
+        declared_size.to_le_bytes().as_slice(),
+        record_bytes.as_slice(),
+    ]
+    .concat()
+}
+
+fn write_buffer_response(
+    stream: &mut TcpStream,
+    payload: &[u8],
+    session_id: u16,
+    reply_id: u16,
+    mode: BufferMode,
+) -> Result<()> {
+    match mode {
+        BufferMode::InlineData => {
+            let reply = make_tcp_packet(CMD_DATA, payload, session_id, reply_id);
+            stream.write_all(&reply)?;
+        }
+        BufferMode::AckPrepare => {
+            let size = payload.len() as u32;
+            let mut data = Vec::with_capacity(5);
+            data.push(0);
+            data.extend(size.to_le_bytes());
+            let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
+            stream.write_all(&reply)?;
+        }
+    }
     Ok(())
 }
 

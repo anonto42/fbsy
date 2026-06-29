@@ -357,41 +357,44 @@ impl ZktecoClient {
         match resp.command {
             CMD_DATA => Ok(resp.data),
 
-            CMD_PREPARE_DATA => {
-                if resp.data.len() < 5 {
-                    return Err(DeviceError::Message(
-                        "CMD_PREPARE_DATA: response too short".to_string(),
-                    ));
-                }
-                // pyzk read_with_buffer uses data[1:5] for size.
-                let size =
-                    u32::from_le_bytes([resp.data[1], resp.data[2], resp.data[3], resp.data[4]])
-                        as usize;
-
-                let max_chunk = self.max_chunk();
-                let mut all_data = Vec::with_capacity(size);
-                let remain = size % max_chunk;
-                let full_chunks = (size - remain) / max_chunk;
-                let mut start = 0usize;
-
-                for _ in 0..full_chunks {
-                    let chunk = self.read_chunk(start, max_chunk)?;
-                    all_data.extend_from_slice(&chunk);
-                    start += max_chunk;
-                }
-                if remain > 0 {
-                    let chunk = self.read_chunk(start, remain)?;
-                    all_data.extend_from_slice(&chunk);
-                }
-
-                let _ = self.send_command(CMD_FREE_DATA, &[]);
-                Ok(all_data)
-            }
+            CMD_ACK_OK | CMD_PREPARE_DATA => self.read_prepared_buffer(&resp),
 
             other => Err(DeviceError::Message(format!(
                 "read_with_buffer: unexpected response {other}"
             ))),
         }
+    }
+
+    fn read_prepared_buffer(&mut self, resp: &ResponsePacket) -> Result<Vec<u8>, DeviceError> {
+        if resp.data.len() < 5 {
+            return Err(DeviceError::Message(format!(
+                "buffer prepare response {} too short",
+                resp.command
+            )));
+        }
+        // pyzk read_with_buffer accepts ACK_OK/PREPARE_DATA and uses data[1:5]
+        // for the prepared buffer size. Some F22 firmware returns ACK_OK here.
+        let size =
+            u32::from_le_bytes([resp.data[1], resp.data[2], resp.data[3], resp.data[4]]) as usize;
+
+        let max_chunk = self.max_chunk();
+        let mut all_data = Vec::with_capacity(size);
+        let remain = size % max_chunk;
+        let full_chunks = (size - remain) / max_chunk;
+        let mut start = 0usize;
+
+        for _ in 0..full_chunks {
+            let chunk = self.read_chunk(start, max_chunk)?;
+            all_data.extend_from_slice(&chunk);
+            start += max_chunk;
+        }
+        if remain > 0 {
+            let chunk = self.read_chunk(start, remain)?;
+            all_data.extend_from_slice(&chunk);
+        }
+
+        let _ = self.send_command(CMD_FREE_DATA, &[]);
+        Ok(all_data)
     }
 
     fn read_chunk(&mut self, start: usize, size: usize) -> Result<Vec<u8>, DeviceError> {
