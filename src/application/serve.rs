@@ -102,6 +102,10 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
         }
     );
 
+    let address = format!("127.0.0.1:{}", cfg.bridge_port);
+    let listener = TcpListener::bind(&address)?;
+    listener.set_nonblocking(true)?;
+
     let states = build_states(&cfg);
     start_boot_syncs(&states);
     start_schedulers(&states);
@@ -113,10 +117,6 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
     }
 
     install_signal_handlers();
-
-    let address = format!("127.0.0.1:{}", cfg.bridge_port);
-    let listener = TcpListener::bind(&address)?;
-    listener.set_nonblocking(true)?;
 
     println!("FingerBridge serving on http://{address}");
     println!("  GET  /health");

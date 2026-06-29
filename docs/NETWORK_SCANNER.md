@@ -7,6 +7,9 @@ It is not a general network inventory tool. It does two focused checks:
 1. Test whether the target host has the ZKTeco port open, normally `4370`.
 2. Try the ZKTeco protocol handshake and `device_info` read.
 
+For confirmed models, likely-compatible device families, and full qualification
+steps, see [DEVICE_COMPATIBILITY.md](DEVICE_COMPATIBILITY.md).
+
 ## One-Shot Scan
 
 ```bash

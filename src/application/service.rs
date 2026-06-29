@@ -7,7 +7,7 @@
 //! [`crate::application::test_server`]. The blocking sync logic — including the
 //! safety invariant — is reused unchanged.
 
-use std::{path::PathBuf, time::Duration};
+use std::{net::TcpListener, path::PathBuf, time::Duration};
 
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
@@ -332,7 +332,9 @@ pub fn run_supervised(service: &str, rest: &[String]) -> Result<()> {
         ServiceKind::AtBridge => {
             let (config, _, _) = parse_bridge(rest);
             let cfg_path = config.unwrap_or_else(paths::default_config_path);
-            load_bridge_port(&cfg_path)
+            let port = load_bridge_port(&cfg_path);
+            preflight_bridge_port(port)?;
+            port
         }
         _ => None,
     };
@@ -639,6 +641,15 @@ fn load_bridge_port(cfg_path: &std::path::Path) -> Option<u16> {
         .load(cfg_path)
         .ok()
         .map(|cfg| cfg.bridge_port)
+}
+
+fn preflight_bridge_port(port: Option<u16>) -> Result<()> {
+    let Some(port) = port else {
+        return Ok(());
+    };
+    TcpListener::bind(("127.0.0.1", port))
+        .map(drop)
+        .map_err(|err| anyhow::anyhow!("bridge port {port} is already in use: {err}"))
 }
 
 /// Seconds since an RFC 3339 start timestamp, or `None` if unparseable.

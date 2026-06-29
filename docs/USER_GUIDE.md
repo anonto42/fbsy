@@ -136,6 +136,8 @@ fbsy scanner scan --json                  # machine-readable output
 The scanner first checks whether port `4370` is open, then tries the ZKTeco protocol.
 When a device responds, it prints IP, firmware, serial, user/template/attendance counts,
 and a suggested device config block you can copy into the setup wizard values.
+For supported model details and a new-device qualification checklist, see
+[DEVICE_COMPATIBILITY.md](DEVICE_COMPATIBILITY.md).
 
 Run it as a background service when you want repeated discovery logs:
 ```bash
