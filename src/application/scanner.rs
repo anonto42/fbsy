@@ -339,10 +339,8 @@ fn scan_one_port(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFind
     let scan_timeout = Duration::from_millis(opts.scan_timeout_ms.max(50));
 
     // Quick TCP connect probe — skip if port is closed.
-    if !opts.force_udp {
-        if TcpStream::connect_timeout(&address, scan_timeout).is_err() {
-            return None;
-        }
+    if !opts.force_udp && TcpStream::connect_timeout(&address, scan_timeout).is_err() {
+        return None;
     }
 
     // Try protocol-specific identification based on port.
