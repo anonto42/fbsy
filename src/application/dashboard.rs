@@ -57,6 +57,7 @@ struct App {
     log_scroll: usize,
     focus: Focus,
     show_help: bool,
+    help_scroll: usize,
     /// Some(view) while a captured CLI command's output overlay is open.
     output: Option<OutputView>,
     /// Set when a `:command` must run attached to the real terminal (interactive
@@ -78,11 +79,12 @@ impl App {
             log_scroll: 0,
             focus: Focus::Table,
             show_help: false,
+            help_scroll: 0,
             output: None,
             pending_attach: None,
             mode: Mode::Normal,
             input: String::new(),
-            status: "press ? for help".to_string(),
+            status: "press ? for help · : for commands".to_string(),
             quit: false,
         }
     }
@@ -153,10 +155,28 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
         }
         return;
     }
-    // While the help overlay is open, any of ?, Esc, or q just closes it.
+    // While the help overlay is open, allow scrolling or close it.
     if app.show_help {
-        if matches!(code, KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc) {
-            app.show_help = false;
+        match code {
+            KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => {
+                app.show_help = false;
+                app.help_scroll = 0;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.help_scroll = app.help_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                app.help_scroll = app.help_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                app.help_scroll = app.help_scroll.saturating_add(10);
+            }
+            KeyCode::Home => app.help_scroll = 0,
+            KeyCode::End => app.help_scroll = usize::MAX,
+            _ => {}
         }
         return;
     }
@@ -628,21 +648,40 @@ fn display_args(args: &[String]) -> String {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
+    let area = frame.area();
+    if area.width < 80 || area.height < 20 {
+        let msg = format!(
+            "Terminal too small ({}x{}). Minimum is 80x20. Please resize.",
+            area.width, area.height
+        );
+        let para = Paragraph::new(msg)
+            .style(Style::default().fg(Color::Red).bold())
+            .wrap(Wrap { trim: true })
+            .alignment(ratatui::layout::Alignment::Center);
+        let centered = centered_rect(60, 3, area);
+        frame.render_widget(Clear, centered);
+        frame.render_widget(para, centered);
+        return;
+    }
+
     let log_constraint = if app.show_logs {
-        Constraint::Min(5)
+        Constraint::Min(8)
     } else {
         Constraint::Length(0)
     };
+
+    let table_height = (rows.len() as u16 + 3).max(5);
+
     let areas = Layout::vertical([
-        Constraint::Length(3), // title
-        Constraint::Length(7), // service table
-        log_constraint,        // log pane
-        Constraint::Length(4), // command palette
-        Constraint::Length(1), // status / input line
+        Constraint::Length(3),            // title
+        Constraint::Length(table_height), // service table (dynamic height)
+        log_constraint,                   // log pane
+        Constraint::Length(4),            // command palette
+        Constraint::Length(1),            // status / input line
     ])
     .split(frame.area());
 
-    draw_title(frame, areas[0]);
+    draw_title(frame, areas[0], rows);
     draw_table(frame, areas[1], app, rows);
     if app.show_logs {
         draw_logs(frame, areas[2], app, rows);
@@ -655,13 +694,16 @@ fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
         draw_output(frame, frame.area(), view);
     }
     if app.show_help {
-        draw_help(frame, frame.area());
+        draw_help(frame, frame.area(), app);
     }
 }
 
 /// Full help: dashboard shortcuts, aliases, and the CLI passthrough model.
-fn draw_help(frame: &mut Frame, full: Rect) {
-    let area = centered_rect(84, 25, full);
+fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
+    let width = full.width.saturating_sub(4).min(90);
+    let height = full.height.saturating_sub(4).min(35);
+    let area = centered_rect(width, height, full);
+
     let dim = Style::default().dim();
     let cyan = Style::default().fg(Color::Cyan).bold();
     let yellow = Style::default().fg(Color::Yellow).bold();
@@ -669,9 +711,10 @@ fn draw_help(frame: &mut Frame, full: Rect) {
     let row = |k: &str, d: &'static str| {
         Line::from(vec![Span::styled(format!("  {k:<26}"), cyan), d.into()])
     };
+    let separator = || Line::from(vec![Span::styled("  ────────────────────────────────────────────────────────────────────────", dim)]);
 
     let lines = vec![
-        Line::from(vec![Span::styled("Single-key shortcuts", yellow)]),
+        Line::from(vec![Span::styled(" Single-key shortcuts", yellow)]),
         row("Tab", "switch focus: service table ⇄ log pane"),
         row("↑/↓ or j/k", "table focus: select · log focus: scroll"),
         row("s", "start selected service (default name + port)"),
@@ -684,9 +727,9 @@ fn draw_help(frame: &mut Frame, full: Rect) {
         row("Home / End", "jump to oldest / newest log lines"),
         row("Esc", "log focus → table · table focus → quit"),
         row("? / q", "this help / quit"),
-        Line::from(""),
+        separator(),
         Line::from(vec![Span::styled(
-            "Command bar passthrough  (press : then type)",
+            " Command bar passthrough  (press : then type)",
             yellow,
         )]),
         Line::from(vec![
@@ -695,7 +738,7 @@ fn draw_help(frame: &mut Frame, full: Rect) {
             " the `fbsy` prefix.".into(),
         ]),
         row("show", "same as `fbsy show`"),
-        row("scanner scan", "discover attendance devices on the LAN"),
+        row("scan --all-ports", "discover network services & devices"),
         row("bridge doctor --json", "captures command output here"),
         row(
             "bridge devices info CODE --users",
@@ -705,8 +748,8 @@ fn draw_help(frame: &mut Frame, full: Rect) {
             "bridge config setup",
             "suspends TUI for the interactive wizard",
         ),
-        Line::from(""),
-        Line::from(vec![Span::styled("Dashboard aliases", yellow)]),
+        separator(),
+        Line::from(vec![Span::styled(" Dashboard aliases", yellow)]),
         row("start <kind> [flags]", "alias for `run <kind> [flags]`"),
         row("stop <instance>", "alias for `close <instance>`"),
         row("restart <instance>", "dashboard-only restart helper"),
@@ -716,8 +759,8 @@ fn draw_help(frame: &mut Frame, full: Rect) {
         ),
         row("logs all", "dashboard-only combined log view"),
         row("select <instance>", "move the highlight"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Multiple mock devices", yellow)]),
+        separator(),
+        Line::from(vec![Span::styled(" Running multiple instances", yellow)]),
         Line::from(vec![
             "  ".into(),
             Span::styled("start zkteco --name dev1 --port 4370", cyan),
@@ -736,19 +779,23 @@ fn draw_help(frame: &mut Frame, full: Rect) {
             "  ".into(),
             Span::styled("start scanner --interval 300", cyan),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Esc closes output/help overlays. Interactive commands return here when done.",
-            dim,
-        )]),
     ];
 
+    let visible = area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(visible);
+    let scroll = app.help_scroll.min(max_scroll).min(u16::MAX as usize) as u16;
+
+    let title = if max_scroll > 0 {
+        format!(" help ({}/{max_scroll}) — ↑/↓ scroll · Esc close ", scroll)
+    } else {
+        " help — Esc close ".to_string()
+    };
+
     frame.render_widget(Clear, area);
-    let para = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" help — commands & running multiple instances "),
-    );
+    let para = Paragraph::new(lines)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(para, area);
 }
 
@@ -760,11 +807,14 @@ fn draw_output(frame: &mut Frame, full: Rect, view: &OutputView) {
     let lines = view
         .lines
         .iter()
-        .map(|line| Line::from(line.clone()))
+        .map(|line| Line::from(format!(" {line}"))) // padded
         .collect::<Vec<_>>();
 
     frame.render_widget(Clear, area);
-    let title = format!(" {}  ↑/↓ scroll · PgUp/PgDn · Esc close ", view.title);
+    let title = format!(
+        " {} [{scroll}/{max_scroll}] · ↑/↓ scroll · Esc close ",
+        view.title
+    );
     let para = Paragraph::new(lines)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false })
@@ -786,13 +836,38 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     }
 }
 
-fn draw_title(frame: &mut Frame, area: Rect) {
-    let title = Paragraph::new(Line::from(vec![
-        "fbsy".bold().cyan(),
-        "  service dashboard".into(),
-        "   —  : for command, q to quit".dim(),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+fn draw_title(frame: &mut Frame, area: Rect, rows: &[ServiceStatus]) {
+    let version = env!("CARGO_PKG_VERSION");
+    let running = rows.iter().filter(|r| r.running).count();
+    let ip = crate::support::network::lan_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    let left = vec![
+        Span::styled(" fbsy v", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(version, Style::default().fg(Color::Cyan).bold()),
+        Span::raw("  ·  "),
+        Span::styled(format!("{running} running"), Style::default().bold()),
+        Span::raw("  ·  "),
+        Span::raw(ip),
+    ];
+    let right = vec![Span::styled(
+        " : commands · ? help · q quit ",
+        Style::default().dim(),
+    )];
+
+    let mut line = left;
+    // Simple right-alignment padding logic
+    let left_len: usize = line.iter().map(|s| s.width()).sum();
+    let right_len: usize = right.iter().map(|s| s.width()).sum();
+    let space = area.width.saturating_sub(left_len as u16 + right_len as u16 + 2); // +2 for borders
+    if space > 0 {
+        line.push(Span::raw(" ".repeat(space as usize)));
+    }
+    line.extend(right);
+
+    let title = Paragraph::new(Line::from(line))
+        .block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, area);
 }
 
@@ -804,9 +879,9 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
         .iter()
         .map(|r| {
             let (status_text, status_color) = if r.running {
-                ("running", Color::Green)
+                ("● running", Color::Green)
             } else {
-                ("stopped", Color::Red)
+                ("● stopped", Color::Red)
             };
             let pid = r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
             let port = r.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
@@ -814,7 +889,6 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
                 .uptime_secs
                 .map(service::format_uptime_secs)
                 .unwrap_or_else(|| "-".into());
-            // Show the live address when running; the static description otherwise.
             let address = if r.running {
                 r.url
                     .clone()
@@ -838,15 +912,14 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
         .collect();
 
     let widths = [
+        Constraint::Length(12),
         Constraint::Length(10),
-        Constraint::Length(9),
         Constraint::Length(8),
         Constraint::Length(6),
-        Constraint::Length(8),
+        Constraint::Length(10),
         Constraint::Min(22),
     ];
-    // The table border brightens when it holds focus so the user can tell
-    // whether the arrow keys move the selection or scroll the logs.
+
     let focused = app.focus == Focus::Table;
     let (title, border_style) = if focused {
         (" services (focus) ", Style::default().fg(Color::Cyan))
@@ -861,10 +934,13 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
                 .border_style(border_style)
                 .title(title),
         )
-        // A bold + cyan highlight + a ▶ marker indicates selection without
-        // inverting the per-cell status colors. Dim it when the logs are focused.
         .row_highlight_style(
             Style::default()
+                .bg(if focused {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
+                })
                 .fg(if focused {
                     Color::Cyan
                 } else {
@@ -872,7 +948,7 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) 
                 })
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▶ ");
+        .highlight_symbol(if focused { "▶ " } else { "  " });
 
     let mut state = TableState::default();
     state.select(Some(app.selected));
@@ -900,7 +976,25 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
     } else {
         lines[start..end]
             .iter()
-            .map(|line| Line::from(line.clone()))
+            .map(|line| {
+                // Dim timestamps, colorize errors
+                if line.contains("ERROR") {
+                    Line::from(Span::styled(line.clone(), Style::default().fg(Color::Red)))
+                } else if line.contains("WARN") {
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(Color::Yellow),
+                    ))
+                } else if line.len() > 30 && line.chars().next().unwrap_or(' ').is_numeric() {
+                    let (ts, rest) = line.split_at(30);
+                    Line::from(vec![
+                        Span::styled(ts.to_string(), Style::default().dim()),
+                        Span::raw(rest.to_string()),
+                    ])
+                } else {
+                    Line::from(line.clone())
+                }
+            })
             .collect()
     };
 
@@ -918,24 +1012,25 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
             }
         )
     };
-    let scroll_label = match (max_scroll, scroll) {
-        (0, _) => "newest".to_string(),
-        (_, 0) => format!("newest · {max_scroll} older lines available"),
-        (max, current) if current == max => format!("oldest · scroll {current}/{max}"),
-        (max, current) => format!("scroll {current}/{max}"),
-    };
-    let focused = app.focus == Focus::Logs;
-    let focus_tag = if focused {
-        " (focus · ↑/↓ scroll)"
+    
+    let scroll_label = if max_scroll == 0 {
+        "".to_string()
+    } else if scroll == 0 {
+        format!(" ▼ newest · {} older ", max_scroll)
+    } else if scroll == max_scroll {
+        format!(" ▲ oldest [{scroll}/{max_scroll}] ")
     } else {
-        ""
+        format!(" [{scroll}/{max_scroll}] ")
     };
+
+    let focused = app.focus == Focus::Logs;
+    let focus_tag = if focused { " (focus)" } else { "" };
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().dim()
     };
-    let title = format!(" {title_base}{focus_tag} · {scroll_label} ");
+    let title = format!(" {title_base}{focus_tag}{scroll_label} ");
     let para = Paragraph::new(shown).block(
         Block::default()
             .borders(Borders::ALL)
@@ -964,30 +1059,30 @@ fn log_window_bounds(
 fn draw_palette(frame: &mut Frame, area: Rect) {
     let key = |k: &str, d: &str| -> Vec<Span<'static>> {
         vec![
-            Span::styled(k.to_string(), Style::default().fg(Color::Cyan).bold()),
-            Span::raw(format!(" {d}   ")),
+            Span::styled(format!(" {k:<3} "), Style::default().fg(Color::Cyan).bold()),
+            Span::raw(format!("{d:<14}")),
         ]
     };
     let mut line1 = Vec::new();
-    line1.extend(key("Tab", "focus table/logs"));
-    line1.extend(key("↑/↓", "select/scroll"));
+    line1.extend(key("Tab", "focus"));
+    line1.extend(key("↑/↓", "scroll"));
     line1.extend(key("s", "start"));
     line1.extend(key("x", "stop"));
     line1.extend(key("r", "restart"));
     line1.extend(key("y", "sync"));
-    line1.extend(key("l", "logs"));
-    line1.extend(key("a", "all logs"));
-    line1.extend(key("?", "help"));
-    line1.extend(key("q", "quit"));
 
-    let line2 = vec![
-        Span::styled(":", Style::default().fg(Color::Yellow).bold()),
-        Span::raw(" command  —  "),
+    let mut line2 = Vec::new();
+    line2.extend(key("l", "logs"));
+    line2.extend(key("a", "all logs"));
+    line2.extend(key("?", "help"));
+    line2.extend(key("q", "quit"));
+    line2.extend(vec![
+        Span::styled(" : ", Style::default().fg(Color::Yellow).bold()),
         Span::styled(
-            "type any CLI command without `fbsy`: show · bridge doctor --json · bridge config setup",
+            "type any CLI command without `fbsy` (e.g. `show`, `scan`)",
             Style::default().dim(),
         ),
-    ];
+    ]);
 
     let para = Paragraph::new(vec![Line::from(line1), Line::from(line2)])
         .block(Block::default().borders(Borders::ALL).title(" commands "));
@@ -995,14 +1090,21 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+    let (mode_str, mode_color) = match app.mode {
+        Mode::Normal => (" NORMAL ", Color::DarkGray),
+        Mode::Command => (" COMMAND ", Color::Yellow),
+    };
+
     let line = match app.mode {
         Mode::Command => Line::from(vec![
-            Span::styled(":", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(mode_str, Style::default().bg(mode_color).fg(Color::Black).bold()),
+            Span::styled(" :", Style::default().fg(Color::Yellow).bold()),
             Span::raw(app.input.clone()),
             Span::styled("█", Style::default().fg(Color::Yellow)),
         ]),
         Mode::Normal => Line::from(vec![
-            Span::styled("status ", Style::default().dim()),
+            Span::styled(mode_str, Style::default().bg(mode_color).fg(Color::White).bold()),
+            Span::styled("  ", Style::default().dim()),
             Span::styled(app.status.clone(), Style::default().fg(Color::Yellow)),
         ]),
     };
