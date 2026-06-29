@@ -405,8 +405,9 @@ impl ZktecoClient {
         let resp = self.send_command(CMD_READ_BUFFER, &cmd_data)?;
         match resp.command {
             CMD_DATA => Ok(resp.data),
-            // UDP: device sends CMD_PREPARE_DATA then streams datagrams until CMD_ACK_OK.
-            CMD_PREPARE_DATA => self.recv_udp_stream(size),
+            // Some devices respond to CMD_READ_BUFFER with PREPARE_DATA then
+            // stream one or more DATA packets followed by ACK_OK.
+            CMD_PREPARE_DATA => self.recv_prepared_chunk_stream(size),
             _ => Err(DeviceError::Message(format!(
                 "read_chunk: expected CMD_DATA, got {}",
                 resp.command
@@ -422,7 +423,7 @@ impl ZktecoClient {
             ));
         };
         let mut data: Vec<u8> = Vec::with_capacity(expected);
-        let mut buf = vec![0u8; 1024 + 8];
+        let mut buf = vec![0u8; (expected + 8).clamp(1024 + 8, UDP_BUF)];
         loop {
             let n = socket
                 .recv(&mut buf)
@@ -438,6 +439,13 @@ impl ZktecoClient {
             }
         }
         Ok(data)
+    }
+
+    fn recv_prepared_chunk_stream(&mut self, expected: usize) -> Result<Vec<u8>, DeviceError> {
+        match &mut self.transport {
+            Transport::Tcp(stream) => recv_tcp_stream_until_ack(stream, expected),
+            Transport::Udp(_) => self.recv_udp_stream(expected),
+        }
     }
 
     fn max_chunk(&self) -> usize {
@@ -550,6 +558,30 @@ fn read_tcp_packet(stream: &mut TcpStream) -> Result<ResponsePacket, DeviceError
         .read_exact(&mut pkt)
         .map_err(|e| DeviceError::Message(format!("tcp read packet: {e}")))?;
     parse_raw_packet(&pkt)
+}
+
+fn recv_tcp_stream_until_ack(
+    stream: &mut TcpStream,
+    expected: usize,
+) -> Result<Vec<u8>, DeviceError> {
+    let mut data = Vec::with_capacity(expected);
+    loop {
+        let resp = read_tcp_packet(stream)?;
+        match resp.command {
+            CMD_DATA => {
+                data.extend_from_slice(&resp.data);
+                if data.len() >= expected {
+                    return Ok(data);
+                }
+            }
+            CMD_ACK_OK => return Ok(data),
+            other => {
+                return Err(DeviceError::Message(format!(
+                    "tcp prepared stream expected DATA/ACK_OK, got {other}"
+                )));
+            }
+        }
+    }
 }
 
 fn parse_raw_packet(pkt: &[u8]) -> Result<ResponsePacket, DeviceError> {

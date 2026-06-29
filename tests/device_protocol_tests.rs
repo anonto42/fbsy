@@ -44,6 +44,13 @@ fn start_mock_device_ack_prepare(port: u16) {
     thread::sleep(Duration::from_millis(400));
 }
 
+fn start_mock_device_prepared_chunk(port: u16) {
+    thread::spawn(move || {
+        let _ = test_server::run_device_prepared_chunk(port, 3);
+    });
+    thread::sleep(Duration::from_millis(400));
+}
+
 #[test]
 fn real_connector_pulls_attendance_from_mock() {
     let port = 14971;
@@ -60,6 +67,18 @@ fn real_connector_pulls_attendance_from_mock() {
 fn real_connector_pulls_attendance_when_prepare_buffer_returns_ack_ok() {
     let port = 14975;
     start_mock_device_ack_prepare(port);
+    let mut client = ZktecoTcpConnector
+        .connect(&device_cfg(port))
+        .expect("connect");
+    let records = client.pull_attendance().expect("pull attendance");
+    client.disconnect();
+    assert_eq!(records.len(), 3, "mock seeded 3 attendance records");
+}
+
+#[test]
+fn real_connector_pulls_attendance_when_read_buffer_streams_prepared_chunks() {
+    let port = 14976;
+    start_mock_device_prepared_chunk(port);
     let mut client = ZktecoTcpConnector
         .connect(&device_cfg(port))
         .expect("connect");

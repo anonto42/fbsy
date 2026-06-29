@@ -26,6 +26,7 @@ const CMD_DB_RRQ: u8 = 7; // read templates buffer
 const CMD_USERTEMP_RRQ: u8 = 9; // read users buffer
 const CMD_ATTLOG_RRQ: u8 = 13;
 const CMD_CLEAR_ATTLOG: u16 = 15;
+const CMD_PREPARE_DATA: u16 = 1500;
 const CMD_ACK_OK: u16 = 2000;
 const CMD_DATA: u16 = 1501;
 const CMD_READ_BUFFER: u16 = 1504;
@@ -50,6 +51,7 @@ struct RawAttendanceMock {
 enum BufferMode {
     InlineData,
     AckPrepare,
+    PreparedChunk,
 }
 
 /// Run a mock ZKTeco device server speaking raw TCP protocol.
@@ -61,6 +63,12 @@ pub fn run_device(port: u16, records_count: usize) -> Result<()> {
 /// F22 firmware that prepares data successfully without using CMD_PREPARE_DATA.
 pub fn run_device_ack_prepare(port: u16, records_count: usize) -> Result<()> {
     run_device_with_buffer_mode(port, records_count, BufferMode::AckPrepare)
+}
+
+/// Run a mock device that returns PREPARE_DATA from CMD_READ_BUFFER and then
+/// streams DATA + ACK_OK, matching pyzk's TCP prepared chunk path.
+pub fn run_device_prepared_chunk(port: u16, records_count: usize) -> Result<()> {
+    run_device_with_buffer_mode(port, records_count, BufferMode::PreparedChunk)
 }
 
 fn run_device_with_buffer_mode(
@@ -294,8 +302,24 @@ fn handle_device_client(
             } else {
                 &[]
             };
-            let reply = make_tcp_packet(CMD_DATA, chunk, session_id, reply_id);
-            stream.write_all(&reply)?;
+            match buffer_mode {
+                BufferMode::PreparedChunk => {
+                    let mut data = Vec::with_capacity(4);
+                    data.extend((chunk.len() as u32).to_le_bytes());
+                    let prepare = make_tcp_packet(CMD_PREPARE_DATA, &data, session_id, reply_id);
+                    stream.write_all(&prepare)?;
+                    let next_reply = reply_id.wrapping_add(1);
+                    let data_packet = make_tcp_packet(CMD_DATA, chunk, session_id, next_reply);
+                    stream.write_all(&data_packet)?;
+                    let ack_reply = next_reply.wrapping_add(1);
+                    let ack = make_tcp_packet(CMD_ACK_OK, &[], session_id, ack_reply);
+                    stream.write_all(&ack)?;
+                }
+                BufferMode::InlineData | BufferMode::AckPrepare => {
+                    let reply = make_tcp_packet(CMD_DATA, chunk, session_id, reply_id);
+                    stream.write_all(&reply)?;
+                }
+            }
         } else if cmd == CMD_CLEAR_ATTLOG {
             if let Ok(mut list) = records.lock() {
                 log::info(
@@ -351,6 +375,14 @@ fn write_buffer_response(
             data.push(0);
             data.extend(size.to_le_bytes());
             let reply = make_tcp_packet(CMD_ACK_OK, &data, session_id, reply_id);
+            stream.write_all(&reply)?;
+        }
+        BufferMode::PreparedChunk => {
+            let size = payload.len() as u32;
+            let mut data = Vec::with_capacity(5);
+            data.push(0);
+            data.extend(size.to_le_bytes());
+            let reply = make_tcp_packet(CMD_PREPARE_DATA, &data, session_id, reply_id);
             stream.write_all(&reply)?;
         }
     }
