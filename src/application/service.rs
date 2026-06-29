@@ -558,7 +558,7 @@ fn address_hints(kind: ServiceKind, url: Option<&str>) -> Vec<String> {
             format!("POST {url}/sync      ← trigger a sync"),
         ],
         ServiceKind::Scanner => vec![format!(
-            "Use `fbsy logs scanner` to see discovered attendance devices"
+            "Use `fbsy logs scanner` to see discovered services and devices"
         )],
     }
 }
@@ -773,8 +773,17 @@ fn scanner_args(interval: u64, opts: &application::scanner::ScanOptions) -> Vec<
         args.push("--host".to_string());
         args.push(host.to_string());
     }
-    args.push("--port".to_string());
-    args.push(opts.port.to_string());
+    // Serialize effective ports as a comma-separated list.
+    let effective = opts.effective_ports();
+    let ports_csv: Vec<String> = effective.iter().map(|p| p.to_string()).collect();
+    args.push("--ports".to_string());
+    args.push(ports_csv.join(","));
+    if opts.all_ports {
+        args.push("--all-ports".to_string());
+    }
+    if opts.wide {
+        args.push("--wide".to_string());
+    }
     args.push("--timeout-ms".to_string());
     args.push(opts.scan_timeout_ms.to_string());
     args.push("--device-timeout".to_string());
@@ -812,11 +821,28 @@ fn parse_scanner(rest: &[String]) -> (u64, application::scanner::ScanOptions) {
                 }
                 i += 2;
             }
-            "--port" => {
-                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {
-                    opts.port = v;
+            "--ports" => {
+                if let Some(csv) = rest.get(i + 1) {
+                    opts.ports = application::scanner::parse_ports_csv(csv);
                 }
                 i += 2;
+            }
+            "--port" => {
+                // Legacy single port — add to ports list if not already there.
+                if let Some(v) = rest.get(i + 1).and_then(|s| s.parse::<u16>().ok()) {
+                    if !opts.ports.contains(&v) {
+                        opts.ports.push(v);
+                    }
+                }
+                i += 2;
+            }
+            "--all-ports" => {
+                opts.all_ports = true;
+                i += 1;
+            }
+            "--wide" => {
+                opts.wide = true;
+                i += 1;
             }
             "--timeout-ms" => {
                 if let Some(v) = rest.get(i + 1).and_then(|s| s.parse().ok()) {

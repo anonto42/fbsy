@@ -58,6 +58,8 @@ pub fn run(cli: Cli) -> Result<()> {
                 scan_options(&args.scan),
             ),
         },
+        // Top-level `fbsy scan` shortcut.
+        Command::Scan(args) => application::scanner::run_scan(scan_options(&args)),
 
         Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
         Command::ServiceSupervised(args) => {
@@ -82,30 +84,47 @@ fn dispatch_run(service: RunService) -> Result<()> {
         RunService::Hrms { name, port } => application::service::run_hrms(name, port),
         RunService::Scanner {
             name,
-            cidr,
+            range,
             host,
             port,
+            all_ports,
+            ports,
+            wide,
             interval,
             timeout_ms,
             device_timeout,
             password,
             udp,
             include_open,
-        } => application::service::run_scanner(
-            name,
-            interval,
-            application::scanner::ScanOptions {
-                cidr,
-                hosts: host,
-                port,
-                scan_timeout_ms: timeout_ms,
-                device_timeout_secs: device_timeout,
-                device_password: password,
-                force_udp: udp,
-                include_open,
-                json: false,
-            },
-        ),
+        } => {
+            let custom_ports = ports
+                .map(|csv| application::scanner::parse_ports_csv(&csv))
+                .unwrap_or_default();
+            let effective_ports = if all_ports {
+                application::scanner::COMMON_PORTS.to_vec()
+            } else if !custom_ports.is_empty() {
+                custom_ports
+            } else {
+                vec![port]
+            };
+            application::service::run_scanner(
+                name,
+                interval,
+                application::scanner::ScanOptions {
+                    cidr: range,
+                    hosts: host,
+                    ports: effective_ports,
+                    all_ports,
+                    wide,
+                    scan_timeout_ms: timeout_ms,
+                    device_timeout_secs: device_timeout,
+                    device_password: password,
+                    force_udp: udp,
+                    include_open,
+                    json: false,
+                },
+            )
+        }
     }
 }
 
@@ -144,10 +163,25 @@ fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
 }
 
 fn scan_options(args: &ScannerScanArgs) -> application::scanner::ScanOptions {
+    let custom_ports = args
+        .ports
+        .as_deref()
+        .map(application::scanner::parse_ports_csv)
+        .unwrap_or_default();
+    let ports = if args.all_ports {
+        application::scanner::COMMON_PORTS.to_vec()
+    } else if !custom_ports.is_empty() {
+        custom_ports
+    } else {
+        vec![args.port]
+    };
+
     application::scanner::ScanOptions {
-        cidr: args.cidr.clone(),
+        cidr: args.range.clone(),
         hosts: args.host.clone(),
-        port: args.port,
+        ports,
+        all_ports: args.all_ports,
+        wide: args.wide,
         scan_timeout_ms: args.timeout_ms,
         device_timeout_secs: args.device_timeout,
         device_password: args.password,

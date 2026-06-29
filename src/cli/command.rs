@@ -44,8 +44,11 @@ pub enum Command {
     Zkteco(ZktecoArgs),
     /// Mock HRMS webhook server.
     Hrms(HrmsArgs),
-    /// Discover attendance devices on the local network.
+    /// Discover services and attendance devices on the local network.
     Scanner(ScannerArgs),
+    /// Quick network scan (shortcut for `scanner scan`).
+    #[command(visible_alias = "find")]
+    Scan(ScannerScanArgs),
 
     /// Internal entry point for detached service processes.
     #[command(name = "__service-run", hide = true)]
@@ -129,15 +132,24 @@ pub enum RunService {
         /// Instance name (default: scanner). Use to run more than one.
         #[arg(long)]
         name: Option<String>,
-        /// CIDR to scan, for example 192.168.1.0/24. Defaults to this machine's LAN /24.
-        #[arg(long)]
-        cidr: Option<String>,
+        /// Network range to scan (e.g. 192.168.1.0/24). Defaults to this machine's LAN /24.
+        #[arg(long, visible_alias = "cidr")]
+        range: Option<String>,
         /// Scan one specific host. Can be repeated.
         #[arg(long)]
         host: Vec<Ipv4Addr>,
-        /// Device TCP port to probe.
+        /// Device TCP port to probe (default: 4370).
         #[arg(short = 'p', long, default_value_t = 4370)]
         port: u16,
+        /// Scan all common server ports (HTTP, SSH, databases, etc.).
+        #[arg(long)]
+        all_ports: bool,
+        /// Comma-separated list of custom ports to scan (e.g. "80,443,3000").
+        #[arg(long)]
+        ports: Option<String>,
+        /// Allow network ranges wider than /24 (up to /16).
+        #[arg(long)]
+        wide: bool,
         /// Repeat scan interval for the service.
         #[arg(long, default_value_t = 300)]
         interval: u64,
@@ -153,7 +165,7 @@ pub enum RunService {
         /// Use UDP for the deeper ZKTeco protocol probe.
         #[arg(long)]
         udp: bool,
-        /// Include hosts with an open port even when ZKTeco probing fails.
+        /// Include hosts with an open port even when identification fails.
         #[arg(long)]
         include_open: bool,
     },
@@ -335,7 +347,7 @@ pub struct ScannerArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ScannerCommand {
-    /// Scan now and print discovered attendance devices.
+    /// Scan now and print discovered services and devices.
     Scan(ScannerScanArgs),
     /// Start the scanner as a detached background service.
     Run(ScannerRunArgs),
@@ -343,15 +355,24 @@ pub enum ScannerCommand {
 
 #[derive(Debug, Args, Clone)]
 pub struct ScannerScanArgs {
-    /// CIDR to scan, for example 192.168.1.0/24. Defaults to this machine's LAN /24.
-    #[arg(long)]
-    pub cidr: Option<String>,
+    /// Network range to scan (e.g. 192.168.1.0/24). Defaults to this machine's LAN /24.
+    #[arg(long, visible_alias = "cidr")]
+    pub range: Option<String>,
     /// Scan one specific host. Can be repeated.
     #[arg(long)]
     pub host: Vec<Ipv4Addr>,
-    /// Device TCP port to probe.
+    /// Device TCP port to probe (default: 4370).
     #[arg(short = 'p', long, default_value_t = 4370)]
     pub port: u16,
+    /// Scan all common server ports (HTTP, SSH, databases, ZKTeco, etc.).
+    #[arg(long)]
+    pub all_ports: bool,
+    /// Comma-separated list of custom ports to scan (e.g. "80,443,3000").
+    #[arg(long)]
+    pub ports: Option<String>,
+    /// Allow network ranges wider than /24 (up to /16).
+    #[arg(long)]
+    pub wide: bool,
     /// TCP port probe timeout in milliseconds.
     #[arg(long, default_value_t = 350)]
     pub timeout_ms: u64,
@@ -364,7 +385,7 @@ pub struct ScannerScanArgs {
     /// Use UDP for the deeper ZKTeco protocol probe.
     #[arg(long)]
     pub udp: bool,
-    /// Include hosts with an open port even when ZKTeco probing fails.
+    /// Include hosts with an open port even when identification fails.
     #[arg(long)]
     pub include_open: bool,
     /// Print machine-readable JSON.
