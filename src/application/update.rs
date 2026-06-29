@@ -233,11 +233,14 @@ fn restart_services(exe: &Path, running: &Running) -> Result<()> {
 
 /// Wait briefly for a pid to exit (so its port is freed) before respawning.
 fn wait_for_exit(pid: u32) {
-    for _ in 0..20 {
+    // `serve` waits up to 30s for an in-flight sync to finish during graceful
+    // shutdown. The updater must wait at least that long before respawning or
+    // the replacement bridge can collide with the old process's HTTP port.
+    for _ in 0..70 {
         if !process::is_alive(pid, None) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(500));
     }
 }
 
