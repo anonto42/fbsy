@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use crate::domain::senseface::{
-    PendingForwardAttendance, SenseFaceAttendance, SenseFaceUser,
-};
+use crate::domain::senseface::{PendingForwardAttendance, SenseFaceAttendance, SenseFaceUser};
 use crate::ports::senseface_store::SenseFaceStore;
 
 pub struct SqliteSenseFaceStore {
@@ -25,8 +23,10 @@ impl SqliteSenseFaceStore {
     fn conn(&self) -> Result<Connection> {
         let con = Connection::open(&self.db_path)
             .with_context(|| format!("open senseface db {}", self.db_path.display()))?;
-        con.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=30000;")
-            .context("set senseface db pragmas")?;
+        con.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=30000;",
+        )
+        .context("set senseface db pragmas")?;
         Ok(con)
     }
 
@@ -156,7 +156,10 @@ impl SenseFaceStore for SqliteSenseFaceStore {
         Ok(())
     }
 
-    fn get_pending_forward_attendance(&self, limit: usize) -> Result<Vec<PendingForwardAttendance>> {
+    fn get_pending_forward_attendance(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<PendingForwardAttendance>> {
         let con = self.conn()?;
         let mut stmt = con
             .prepare(
@@ -208,7 +211,8 @@ impl SenseFaceStore for SqliteSenseFaceStore {
             for id in chunk {
                 params.push(Box::new(*id));
             }
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
             con.execute(&sql, param_refs.as_slice())
                 .context("mark attendance forwarded")?;
         }
@@ -230,7 +234,11 @@ impl SenseFaceStore for SqliteSenseFaceStore {
 }
 
 impl SqliteSenseFaceStore {
-    pub fn update_employee_names_from_attendance(&self, serial: &str, employee_id: &str) -> Result<()> {
+    pub fn update_employee_names_from_attendance(
+        &self,
+        serial: &str,
+        employee_id: &str,
+    ) -> Result<()> {
         let con = self.conn()?;
         let name: Option<String> = con
             .query_row(

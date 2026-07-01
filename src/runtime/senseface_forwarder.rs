@@ -12,10 +12,7 @@ use anyhow::Result;
 use crate::{
     config::{BridgeDeviceConfig, SenseFaceConfig},
     domain::senseface::{senseface_timezone_offset, to_hrms_events_from_senseface},
-    ports::{
-        hrms::HrmsClient,
-        senseface_store::SenseFaceStore,
-    },
+    ports::{hrms::HrmsClient, senseface_store::SenseFaceStore},
     support::log,
 };
 
@@ -32,9 +29,7 @@ pub fn start_senseface_forwarder(
         thread::sleep(Duration::from_secs(10));
         log::info(
             "sf-fwd",
-            format_args!(
-                "SenseFace forwarder started (interval={interval}s, batch=200)"
-            ),
+            format_args!("SenseFace forwarder started (interval={interval}s, batch=200)"),
         );
         loop {
             for _ in 0..interval {

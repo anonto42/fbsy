@@ -144,9 +144,9 @@ fn handle_connection(
     let content_length: usize = lines
         .filter_map(|line| {
             let lower = line.to_ascii_lowercase();
-            lower.strip_prefix("content-length:").and_then(|v| {
-                v.trim().parse().ok()
-            })
+            lower
+                .strip_prefix("content-length:")
+                .and_then(|v| v.trim().parse().ok())
         })
         .next()
         .unwrap_or(0);
@@ -189,33 +189,19 @@ fn handle_connection(
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
     match (method, path) {
-        ("GET", "/iclock/cdata") => {
-            handle_get_cdata(&mut stream, query)
-        }
-        ("GET", "/iclock/getrequest") => {
-            handle_get_getrequest(&mut stream, &store, query)
-        }
+        ("GET", "/iclock/cdata") => handle_get_cdata(&mut stream, query),
+        ("GET", "/iclock/getrequest") => handle_get_getrequest(&mut stream, &store, query),
         ("POST", "/iclock/cdata") => {
             handle_post_cdata(&mut stream, &store, config, query, &body, &remote_ip)
         }
-        ("POST", "/iclock/devicecmd") => {
-            handle_post_devicecmd(&mut stream)
-        }
-        ("POST", "/iclock/registry") => {
-            handle_post_registry(&mut stream)
-        }
+        ("POST", "/iclock/devicecmd") => handle_post_devicecmd(&mut stream),
+        ("POST", "/iclock/registry") => handle_post_registry(&mut stream),
         ("GET", "/senseface/health") | ("GET", "/health") => {
             handle_senseface_health(&mut stream, &store, config)
         }
-        ("GET", "/") => {
-            handle_root(&mut stream)
-        }
-        ("OPTIONS", _) => {
-            write_options(&mut stream)
-        }
-        _ => {
-            write_error(&mut stream, 404, "not found")
-        }
+        ("GET", "/") => handle_root(&mut stream),
+        ("OPTIONS", _) => write_options(&mut stream),
+        _ => write_error(&mut stream, 404, "not found"),
     }
 }
 
@@ -296,10 +282,7 @@ fn handle_post_cdata(
             match store.save_attendance_record(&sn, &[record]) {
                 Ok(n) => inserted += n,
                 Err(err) => {
-                    log::warn(
-                        "senseface",
-                        format_args!("save attendance failed: {err}"),
-                    );
+                    log::warn("senseface", format_args!("save attendance failed: {err}"));
                 }
             }
             let employee_record = crate::domain::senseface::SenseFaceUser {

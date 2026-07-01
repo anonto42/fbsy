@@ -74,9 +74,7 @@ pub fn parse_user_line(line: &str) -> Option<SenseFaceUser> {
     if trimmed.is_empty() {
         return None;
     }
-    let without_user = trimmed
-        .strip_prefix("USER ")
-        .unwrap_or(trimmed);
+    let without_user = trimmed.strip_prefix("USER ").unwrap_or(trimmed);
     let without_pin = without_user.strip_prefix("PIN=").unwrap_or(without_user);
     let parts: Vec<&str> = without_pin.split('\t').collect();
     if parts.is_empty() {
@@ -205,7 +203,9 @@ pub fn senseface_timezone_offset(tz: &str) -> Option<FixedOffset> {
         "America/Denver" | "MST" | "MDT" => FixedOffset::east_opt(-7 * 3600),
         "America/Los_Angeles" | "PST" | "PDT" => FixedOffset::east_opt(-8 * 3600),
         "America/Sao_Paulo" | "BRT" => FixedOffset::east_opt(-3 * 3600),
-        "America/Mexico_City" | "Central Standard Time (Mexico)" => FixedOffset::east_opt(-6 * 3600),
+        "America/Mexico_City" | "Central Standard Time (Mexico)" => {
+            FixedOffset::east_opt(-6 * 3600)
+        }
         "Australia/Sydney" | "AEST" | "AEDT" => FixedOffset::east_opt(10 * 3600),
         "Australia/Perth" | "AWST" => FixedOffset::east_opt(8 * 3600),
         "Pacific/Auckland" | "NZST" | "NZDT" => FixedOffset::east_opt(12 * 3600),

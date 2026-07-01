@@ -55,7 +55,10 @@ use crate::{
     },
     config::BridgeConfig,
     ports::config_store::ConfigStore,
-    runtime::{job_poller::start_job_poller, senseface_forwarder::start_senseface_forwarder, DeviceSyncState},
+    runtime::{
+        job_poller::start_job_poller, senseface_forwarder::start_senseface_forwarder,
+        DeviceSyncState,
+    },
     support::{log, paths::default_config_path},
 };
 
@@ -147,17 +150,13 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
                     let sf_store2 = Arc::clone(&store);
                     let sf_config2 = sf.clone();
                     thread::spawn(move || {
-                        let receiver =
-                            crate::application::senseface::SenseFaceReceiver::new(
-                                sf_store2,
-                                sf_config2,
-                                sf_shutdown2,
-                            );
+                        let receiver = crate::application::senseface::SenseFaceReceiver::new(
+                            sf_store2,
+                            sf_config2,
+                            sf_shutdown2,
+                        );
                         if let Err(err) = receiver.run() {
-                            log::error(
-                                "senseface",
-                                format_args!("receiver failed: {err}"),
-                            );
+                            log::error("senseface", format_args!("receiver failed: {err}"));
                         }
                     });
 
@@ -174,10 +173,7 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
                     );
                 }
                 Err(err) => {
-                    log::error(
-                        "senseface",
-                        format_args!("could not open store: {err}"),
-                    );
+                    log::error("senseface", format_args!("could not open store: {err}"));
                 }
             }
         }
