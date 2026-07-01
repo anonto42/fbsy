@@ -1,7 +1,9 @@
 {
   "_comment": "Copy this file to config.json and fill in your values.",
+  "bridgeMode": "pull",
   "vpsWebhookUrl": "https://api.yourdomain.com/api/v1/biometric-devices/webhook",
   "bridgePort": 7431,
+  "autoStartOnBoot": true,
   "jobPollIntervalSeconds": 30,
   "devices": [
     {
@@ -17,5 +19,23 @@
       "clearAttendanceAfterSync": false,
       "syncIntervalSeconds": 300
     }
-  ]
+  ],
+  "senseFace": {
+    "enabled": false,
+    "bindHost": "0.0.0.0",
+    "port": 8090,
+    "timezone": "Asia/Dhaka",
+    "deviceCodePrefix": "SF",
+    "organizationId": 1,
+    "apiKey": "your-webhook-api-key-here",
+    "forwardIntervalSeconds": 10,
+    "devices": [
+      {
+        "serialNumber": "SENSEFACE-SERIAL",
+        "deviceCode": "FACE-GATE-01",
+        "organizationId": 1,
+        "apiKey": "your-webhook-api-key-here"
+      }
+    ]
+  }
 }

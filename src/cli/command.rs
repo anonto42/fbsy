@@ -264,6 +264,12 @@ pub enum ConfigCommand {
     Setup {
         #[arg(long)]
         path: Option<PathBuf>,
+        /// Write a ready-to-run local mock testing config with no prompts.
+        #[arg(long)]
+        local: bool,
+        /// Overwrite an existing config when using --local.
+        #[arg(long)]
+        force: bool,
     },
 }
 

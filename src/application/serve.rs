@@ -51,11 +51,11 @@ fn install_signal_handlers() {
 use crate::{
     adapters::{
         config_file::JsonConfigStore, device_zkteco_tcp::ZktecoTcpConnector,
-        hrms_reqwest::ReqwestHrmsClient,
+        hrms_reqwest::ReqwestHrmsClient, senseface_sqlite::SqliteSenseFaceStore,
     },
     config::BridgeConfig,
     ports::config_store::ConfigStore,
-    runtime::{job_poller::start_job_poller, DeviceSyncState},
+    runtime::{job_poller::start_job_poller, senseface_forwarder::start_senseface_forwarder, DeviceSyncState},
     support::{log, paths::default_config_path},
 };
 
@@ -72,16 +72,19 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
 
     println!("FingerBridge service starting");
     println!("  Config: {}", path.display());
-    println!("  Devices: {}", cfg.devices.len());
-    for device in &cfg.devices {
-        println!(
-            "  Device {} -> {}:{} every {}s clearAfterSync={}",
-            device.device_code,
-            device.device_ip,
-            device.device_port,
-            device.sync_interval_seconds,
-            device.clear_attendance_after_sync
-        );
+    println!("  Bridge mode: {:?}", cfg.bridge_mode);
+    if cfg.uses_pull() {
+        println!("  Devices: {}", cfg.devices.len());
+        for device in &cfg.devices {
+            println!(
+                "  Device {} -> {}:{} every {}s clearAfterSync={}",
+                device.device_code,
+                device.device_ip,
+                device.device_port,
+                device.sync_interval_seconds,
+                device.clear_attendance_after_sync
+            );
+        }
     }
     println!(
         "  Job polling: {}",
@@ -114,6 +117,70 @@ pub fn run(interval: Option<u64>, no_poll: bool, config: Option<PathBuf>) -> Res
     }
     if cfg.auto_update {
         start_auto_updater(cfg.update_check_interval_hours);
+    }
+
+    if let Some(ref sf) = cfg.sense_face {
+        if sf.enabled {
+            let db_path = crate::support::paths::state_dir().join("senseface.db");
+            match SqliteSenseFaceStore::new(&db_path) {
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    let hrms = Arc::new(ReqwestHrmsClient::default());
+                    let shutdown = Arc::new(AtomicBool::new(false));
+
+                    let sf_shutdown = Arc::clone(&shutdown);
+                    let sf_store = Arc::clone(&store);
+                    let sf_config = sf.clone();
+                    let sf_webhook = cfg.vps_webhook_url.clone();
+                    let sf_hrms = Arc::clone(&hrms);
+                    thread::spawn(move || {
+                        start_senseface_forwarder(
+                            sf_store,
+                            sf_config,
+                            sf_webhook,
+                            sf_hrms,
+                            sf_shutdown,
+                        );
+                    });
+
+                    let sf_shutdown2 = Arc::clone(&shutdown);
+                    let sf_store2 = Arc::clone(&store);
+                    let sf_config2 = sf.clone();
+                    thread::spawn(move || {
+                        let receiver =
+                            crate::application::senseface::SenseFaceReceiver::new(
+                                sf_store2,
+                                sf_config2,
+                                sf_shutdown2,
+                            );
+                        if let Err(err) = receiver.run() {
+                            log::error(
+                                "senseface",
+                                format_args!("receiver failed: {err}"),
+                            );
+                        }
+                    });
+
+                    println!(
+                        "  SenseFace ADMS receiver: http://{}:{}",
+                        sf.bind_host, sf.port
+                    );
+                    log::info(
+                        "senseface",
+                        format_args!(
+                            "ADMS receiver started on http://{}:{}",
+                            sf.bind_host, sf.port
+                        ),
+                    );
+                }
+                Err(err) => {
+                    log::error(
+                        "senseface",
+                        format_args!("could not open store: {err}"),
+                    );
+                }
+            }
+        }
     }
 
     install_signal_handlers();

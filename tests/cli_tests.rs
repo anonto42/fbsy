@@ -67,6 +67,18 @@ fn bridge_doctor_help_exits_zero() {
 }
 
 #[test]
+fn bridge_config_setup_help_mentions_local_preset() {
+    let out = fbsy()
+        .args(["bridge", "config", "setup", "--help"])
+        .output()
+        .expect("run fbsy bridge config setup --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--local"));
+    assert!(stdout.contains("--force"));
+}
+
+#[test]
 fn bridge_config_validate_missing_file_exits_nonzero() {
     let out = fbsy()
         .args([

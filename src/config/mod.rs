@@ -10,5 +10,6 @@ mod model;
 
 pub use error::ConfigError;
 pub use model::{
-    BridgeConfig, BridgeDeviceConfig, RedactedBridgeConfig, RedactedBridgeDeviceConfig,
+    BridgeConfig, BridgeDeviceConfig, BridgeMode, RedactedBridgeConfig, RedactedBridgeDeviceConfig,
+    RedactedSenseFaceConfig, RedactedSenseFaceDeviceConfig, SenseFaceConfig, SenseFaceDeviceConfig,
 };

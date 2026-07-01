@@ -141,10 +141,19 @@ fn dispatch_at_bridge(command: AtBridgeCommand) -> Result<()> {
             ConfigCommand::Validate { path } => application::config::validate(path),
             ConfigCommand::Show { path } => application::config::show(path),
             ConfigCommand::Path => application::config::path(),
-            ConfigCommand::Setup { path } => match path {
-                Some(path) => application::setup::run_at(path),
-                None => application::setup::run(),
-            },
+            ConfigCommand::Setup { path, local, force } => {
+                if local {
+                    application::setup::run_local_at(
+                        path.unwrap_or_else(crate::support::paths::default_config_path),
+                        force,
+                    )
+                } else {
+                    match path {
+                        Some(path) => application::setup::run_at(path),
+                        None => application::setup::run(),
+                    }
+                }
+            }
         },
         AtBridgeCommand::Doctor { json, deep, config } => {
             application::doctor::run(config, json, deep)

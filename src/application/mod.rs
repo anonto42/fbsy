@@ -9,6 +9,7 @@ pub mod dashboard;
 pub mod doctor;
 pub mod install;
 pub mod scanner;
+pub mod senseface;
 pub mod serve;
 pub mod service;
 pub mod setup;

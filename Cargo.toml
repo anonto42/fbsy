@@ -1,6 +1,6 @@
 [package]
 name = "fingerbridge"
-version = "0.2.26"
+version = "1.0.0"
 edition = "2021"
 description = "Native biometric attendance bridge for HRMS webhook ingestion"
 license = "Proprietary"
@@ -30,6 +30,7 @@ directories = "6"
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 ratatui = "0.29"
 sha2 = "0.10"
+rusqlite = { version = "0.31", features = ["bundled"] }
 self-replace = "1"
 
 [target.'cfg(unix)'.dependencies]

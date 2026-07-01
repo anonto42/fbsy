@@ -4,6 +4,7 @@
 pub mod job_poller;
 pub mod process;
 pub mod registry;
+pub mod senseface_forwarder;
 pub mod sync_state;
 
 pub use sync_state::DeviceSyncState;

@@ -7,3 +7,4 @@
 pub mod config_store;
 pub mod device;
 pub mod hrms;
+pub mod senseface_store;

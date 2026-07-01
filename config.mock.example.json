@@ -1,7 +1,9 @@
 {
   "_comment": "Local mock test config. Start the mock device on port 14370 and mock HRMS on port 18800.",
+  "bridgeMode": "pull",
   "vpsWebhookUrl": "http://127.0.0.1:18800/webhook",
   "bridgePort": 7431,
+  "autoStartOnBoot": false,
   "devices": [
     {
       "deviceIp": "127.0.0.1",
@@ -12,9 +14,9 @@
       "deviceOmitPing": true,
       "deviceCode": "MOCK-GATE-01",
       "organizationId": 1,
-      "apiKey": "mock-api-key",
+      "apiKey": "mock-key",
       "clearAttendanceAfterSync": false,
-      "syncIntervalSeconds": 300
+      "syncIntervalSeconds": 30
     }
   ]
 }

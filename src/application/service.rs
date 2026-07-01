@@ -106,7 +106,8 @@ pub fn run_at_bridge(
     }
 
     // Configured and stopped — start it. Record the bridge port from config.
-    let port = load_bridge_port(&cfg_path);
+    let cfg = JsonConfigStore.load(&cfg_path)?;
+    let port = Some(cfg.bridge_port);
     let mut args = Vec::new();
     if let Some(c) = config {
         args.push("--config".to_string());
@@ -119,7 +120,20 @@ pub fn run_at_bridge(
     if no_poll {
         args.push("--no-poll".to_string());
     }
-    start_detached(ServiceKind::AtBridge, &name, port, &args)
+    start_detached(ServiceKind::AtBridge, &name, port, &args)?;
+    if cfg.auto_start_on_boot && !application::autostart::status(&name).installed {
+        println!(
+            "{} This config requests OS boot auto-start; attempting to enable it now.",
+            style("→").cyan().bold()
+        );
+        if let Err(err) = application::autostart::enable(&name, Some(cfg_path.clone())) {
+            println!(
+                "{} Boot auto-start is not enabled yet: {err}",
+                style("!").yellow().bold()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Print-free spawn: refuse double-start, clear stale entry, spawn detached,

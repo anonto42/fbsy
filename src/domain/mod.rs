@@ -5,6 +5,7 @@
 
 pub mod attendance;
 pub mod event;
+pub mod senseface;
 pub mod sync_result;
 pub mod template;
 

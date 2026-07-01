@@ -7,3 +7,4 @@
 pub mod config_file;
 pub mod device_zkteco_tcp;
 pub mod hrms_reqwest;
+pub mod senseface_sqlite;

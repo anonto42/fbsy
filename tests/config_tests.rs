@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use fingerbridge::config::{BridgeConfig, ConfigError};
+use fingerbridge::config::{BridgeConfig, BridgeMode, ConfigError};
 use serde_json::json;
 
 #[test]
@@ -23,11 +23,55 @@ fn legacy_single_device_config_is_wrapped_into_devices_array() {
     .expect("legacy config should load");
 
     assert_eq!(cfg.bridge_port, 7431);
+    assert_eq!(cfg.bridge_mode, BridgeMode::Pull);
     assert_eq!(cfg.devices.len(), 1);
     assert_eq!(cfg.devices[0].device_code, "LEGACY-DEVICE");
     assert_eq!(cfg.devices[0].organization_id, 9);
     assert_eq!(cfg.devices[0].device_port, 4370);
     assert_eq!(cfg.devices[0].sync_interval_seconds, 300);
+}
+
+#[test]
+fn push_only_config_can_load_without_pull_devices() {
+    let cfg = BridgeConfig::from_json_value(json!({
+        "bridgeMode": "push",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "autoStartOnBoot": true,
+        "devices": [],
+        "senseFace": {
+            "enabled": true,
+            "apiKey": "senseface-secret",
+            "organizationId": 7,
+            "devices": [{
+                "serialNumber": "SF123",
+                "deviceCode": "FACE-GATE-01"
+            }]
+        }
+    }))
+    .expect("push-only config should load");
+
+    assert_eq!(cfg.bridge_mode, BridgeMode::Push);
+    assert!(cfg.auto_start_on_boot);
+    assert!(cfg.devices.is_empty());
+    let sense_face = cfg.sense_face.expect("senseFace config");
+    assert_eq!(sense_face.port, 8090);
+    assert_eq!(sense_face.devices[0].api_key, "senseface-secret");
+    assert_eq!(sense_face.devices[0].organization_id, 7);
+}
+
+#[test]
+fn pull_mode_still_requires_pull_devices() {
+    let err = BridgeConfig::from_json_value(json!({
+        "bridgeMode": "pull",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "devices": []
+    }))
+    .expect_err("pull mode without devices must fail");
+
+    assert!(matches!(err, ConfigError::Invalid(_)));
+    assert!(err
+        .to_string()
+        .contains("devices must be a non-empty array"));
 }
 
 #[test]
