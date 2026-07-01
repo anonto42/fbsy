@@ -127,7 +127,7 @@ impl SenseFaceStore for SqliteSenseFaceStore {
                     ],
                 )
                 .context("save attendance record")?;
-            inserted += rows as usize;
+            inserted += rows;
         }
         Ok(inserted)
     }
@@ -230,32 +230,5 @@ impl SenseFaceStore for SqliteSenseFaceStore {
             )
             .context("count missing employees")?;
         Ok(count as usize)
-    }
-}
-
-impl SqliteSenseFaceStore {
-    pub fn update_employee_names_from_attendance(
-        &self,
-        serial: &str,
-        employee_id: &str,
-    ) -> Result<()> {
-        let con = self.conn()?;
-        let name: Option<String> = con
-            .query_row(
-                "SELECT name FROM employees WHERE serial_number=? AND employee_id=?",
-                rusqlite::params![serial, employee_id],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(name) = name {
-            if !name.is_empty() {
-                con.execute(
-                    "UPDATE attendance SET employee_name=? WHERE serial_number=? AND employee_id=? AND employee_name=''",
-                    rusqlite::params![name, serial, employee_id],
-                )
-                .context("update employee names in attendance")?;
-            }
-        }
-        Ok(())
     }
 }
