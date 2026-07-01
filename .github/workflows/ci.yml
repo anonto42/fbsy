@@ -66,9 +66,7 @@ jobs:
           fetch-depth: 0   # full history so gitleaks can scan all commits on the PR
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: gacts/gitleaks@v1
 
   # ── 1.7. Always: test coverage (non-blocking signal) ────────────────────────
   coverage:
