@@ -34,6 +34,7 @@ fn device_cfg(code: &str) -> BridgeDeviceConfig {
         organization_id: 1,
         sync_interval_seconds: 300,
         clear_attendance_after_sync: false,
+        clear_attendance_threshold: None,
     }
 }
 
