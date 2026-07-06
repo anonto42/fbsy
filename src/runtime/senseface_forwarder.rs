@@ -151,6 +151,6 @@ fn resolve_device_config(serial: &str, config: &SenseFaceConfig) -> BridgeDevice
         organization_id: config.organization_id,
         sync_interval_seconds: 300,
         clear_attendance_after_sync: false,
-            clear_attendance_threshold: None,
+        clear_attendance_threshold: None,
     }
 }
