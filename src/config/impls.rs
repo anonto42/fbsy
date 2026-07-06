@@ -183,6 +183,7 @@ impl BridgeDeviceConfig {
             organization_id: self.organization_id,
             sync_interval_seconds: self.sync_interval_seconds,
             clear_attendance_after_sync: self.clear_attendance_after_sync,
+            clear_attendance_threshold: self.clear_attendance_threshold,
         }
     }
 
@@ -536,6 +537,15 @@ fn parse_device_from_object(
             "clearAttendanceAfterSync",
             context,
         )?,
+        clear_attendance_threshold: match object.get("clearAttendanceThreshold") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(u64_from_value(
+                Some(v),
+                0,
+                "clearAttendanceThreshold",
+                context,
+            )?),
+        },
     })
 }
 

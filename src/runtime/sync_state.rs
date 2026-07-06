@@ -210,7 +210,16 @@ impl DeviceSyncState {
 
         let mut cleared = false;
         let mut message = format!("forwarded {} event(s)", events.len());
-        if self.device.clear_attendance_after_sync {
+        // Threshold-based clear: trigger when pulled count reaches the threshold.
+        // Lets old firmware (e.g. F22 Ver 6.60) clear only when memory is filling up
+        // rather than on every sync, reducing the risk of a failed clear leaving the
+        // device in a bad state.
+        let threshold_triggered = self
+            .device
+            .clear_attendance_threshold
+            .map(|t| t > 0 && attendance.len() as u64 >= t)
+            .unwrap_or(false);
+        if self.device.clear_attendance_after_sync || threshold_triggered {
             self.log(Level::Info, format_args!("clearing attendance on device"));
             match client.clear_attendance() {
                 Ok(()) => {

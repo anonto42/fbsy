@@ -241,6 +241,7 @@ fn local_test_config() -> BridgeConfig {
             organization_id: 1,
             sync_interval_seconds: 30,
             clear_attendance_after_sync: false,
+            clear_attendance_threshold: None,
         }],
         sense_face: None,
     }
@@ -428,6 +429,7 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         organization_id,
         sync_interval_seconds,
         clear_attendance_after_sync,
+        clear_attendance_threshold: None,
     })
 }
 

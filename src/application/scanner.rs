@@ -373,6 +373,7 @@ fn probe_zkteco(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFindi
         organization_id: 1,
         sync_interval_seconds: 300,
         clear_attendance_after_sync: false,
+        clear_attendance_threshold: None,
     };
 
     match connector.connect(&cfg) {

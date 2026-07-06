@@ -78,6 +78,12 @@ pub struct BridgeDeviceConfig {
     pub sync_interval_seconds: u64,
     /// Clear attendance from the device only after successful upload.
     pub clear_attendance_after_sync: bool,
+    /// Clear device attendance when pulled record count reaches this threshold.
+    /// Ignored when `clear_attendance_after_sync` is true (already always clears).
+    /// Use this for old firmware that can't be cleared every sync but needs
+    /// periodic clearing before device memory wraps (e.g. set to 1000 for F22).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clear_attendance_threshold: Option<u64>,
 }
 
 /// Safe-to-print version of `BridgeConfig`.
@@ -114,6 +120,8 @@ pub struct RedactedBridgeDeviceConfig {
     pub organization_id: u64,
     pub sync_interval_seconds: u64,
     pub clear_attendance_after_sync: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clear_attendance_threshold: Option<u64>,
 }
 
 /// SenseFace / ADMS push receiver configuration.
