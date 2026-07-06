@@ -1,3 +1,12 @@
+"https://api.selevohq.com/api/v1/biometric-devices/webhook",
+  "bridgePort": 7431,
+  "autoStartOnBoot": true,
+  "hrmsBaseUrl": "https://api.selevohq.com/api/v1",
+  "jobPollIntervalSeconds": 30,
+  "devices": [
+    {
+      "deviceIp": "192.168.4.139",
+
 # FingerBridge (`fbsy`)
 
 Native biometric attendance bridge, packaged as a small **service manager** — connects ZKTeco devices to HRMS via webhook.
