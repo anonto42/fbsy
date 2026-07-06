@@ -408,6 +408,10 @@ impl ZktecoClient {
             // Some devices respond to CMD_READ_BUFFER with PREPARE_DATA then
             // stream one or more DATA packets followed by ACK_OK.
             CMD_PREPARE_DATA => self.recv_prepared_chunk_stream(size),
+            // Older F-series firmware (e.g. F22 Ver 6.60) directly ACKs a
+            // buffer-read request with no payload attached — this chunk is
+            // empty rather than an error.
+            CMD_ACK_OK => Ok(Vec::new()),
             _ => Err(DeviceError::Message(format!(
                 "read_chunk: expected CMD_DATA, got {}",
                 resp.command
