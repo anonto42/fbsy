@@ -27,6 +27,7 @@ fn device_config(clear_attendance_after_sync: bool) -> BridgeDeviceConfig {
         organization_id: 1,
         sync_interval_seconds: 300,
         clear_attendance_after_sync,
+        clear_attendance_threshold: None,
     }
 }
 
