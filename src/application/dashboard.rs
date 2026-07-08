@@ -1,9 +1,8 @@
 //! Live full-screen service dashboard (`fbsy dashboard`).
 //!
-//! A ratatui front-end over the same registry/process core that powers
-//! `fbsy show`/`run`/`close`. It auto-refreshes, shows a live log pane, and
-//! offers two ways to drive services: single-key shortcuts and a `:command`
-//! bar that accepts the full service-management vocabulary.
+//! A ratatui front-end over the bridge service's registry/process core.
+//! It auto-refreshes, shows a live log pane, and offers two ways to drive
+//! the bridge service: single-key shortcuts and a `:command` bar.
 
 use std::{
     io::{self, IsTerminal, Write},
@@ -37,11 +36,16 @@ enum Mode {
     Command,
 }
 
-/// Which pane the arrow keys drive: the service table or the log view.
+/// Which full-screen page the dashboard is showing.
+///
+/// The dashboard is a small page-based app: it launches on `Home` (logo +
+/// prompt, centered), running any command redirects to `Output` (live
+/// execution logs), and `?` opens `Help`. `Esc` always navigates back home.
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum Focus {
-    Table,
-    Logs,
+enum Page {
+    Home,
+    Output,
+    Help,
 }
 
 /// Captured output of a passthrough CLI command, shown in a scrollable overlay.
@@ -51,20 +55,26 @@ struct OutputView {
     scroll: usize,
 }
 
+/// Work that must run attached to the real terminal (outside the TUI).
+enum AttachedTask {
+    /// Re-run this same `fbsy` binary with the given args (install/update/…).
+    Cli(Vec<String>),
+    /// Interactive setup wizard (configure HRMS + devices).
+    Setup,
+    /// One-shot LAN scan for biometric devices.
+    Scan,
+}
+
 struct App {
-    selected: usize,
-    show_logs: bool,
-    all_logs: bool,
+    page: Page,
     log_scroll: usize,
-    focus: Focus,
-    show_help: bool,
     help_scroll: usize,
     /// Some(view) while a captured CLI command's output overlay is open.
     output: Option<OutputView>,
-    /// Set when a `:command` must run attached to the real terminal (interactive
-    /// commands like `bridge config setup`); performed by the event loop, which
-    /// owns the terminal so it can suspend and resume the TUI.
-    pending_attach: Option<Vec<String>>,
+    /// Set when a `:command` must run attached to the real terminal;
+    /// performed by the event loop, which owns the terminal so it can
+    /// suspend and resume the TUI.
+    pending_attach: Option<AttachedTask>,
     mode: Mode,
     input: String,
     status: String,
@@ -74,12 +84,8 @@ struct App {
 impl App {
     fn new() -> Self {
         Self {
-            selected: 0,
-            show_logs: false,
-            all_logs: false,
+            page: Page::Home,
             log_scroll: 0,
-            focus: Focus::Table,
-            show_help: false,
             help_scroll: 0,
             output: None,
             pending_attach: None,
@@ -89,13 +95,22 @@ impl App {
             quit: false,
         }
     }
+
+    /// Navigate to a page, resetting that page's scroll state.
+    fn goto(&mut self, page: Page) {
+        self.page = page;
+        match page {
+            Page::Output => self.log_scroll = 0,
+            Page::Help => self.help_scroll = 0,
+            Page::Home => {}
+        }
+    }
 }
 
 /// Run the dashboard. Requires an interactive terminal.
 pub fn run() -> Result<()> {
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         println!("fbsy dashboard needs an interactive terminal.");
-        println!("Use `fbsy show` for a one-shot snapshot instead.");
         return Ok(());
     }
 
@@ -111,11 +126,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
     let mut app = App::new();
 
     while !app.quit {
-        let rows = dashboard_rows(service::snapshot());
-        if app.selected >= rows.len() {
-            app.selected = rows.len().saturating_sub(1);
-        }
-        terminal.draw(|frame| draw(frame, &app, &rows))?;
+        let bridge = bridge_status(service::snapshot());
+        let sync_line = last_sync_summary();
+        terminal.draw(|frame| draw(frame, &app, &bridge, &sync_line))?;
 
         if !event::poll(TICK)? {
             continue;
@@ -129,13 +142,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
 
         match app.mode {
             Mode::Command => handle_command_key(&mut app, key.code),
-            Mode::Normal => handle_normal_key(&mut app, key.code, &rows),
+            Mode::Normal => handle_normal_key(&mut app, key.code),
         }
 
         // An interactive command must own the real terminal: drop the TUI, run it
         // attached, then re-enter the alternate screen.
-        if let Some(args) = app.pending_attach.take() {
-            run_attached(terminal, &args, &mut app.status);
+        if let Some(task) = app.pending_attach.take() {
+            run_attached(terminal, task, &mut app.status);
         }
     }
     Ok(())
@@ -143,7 +156,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
 
 // ── Key handling ──────────────────────────────────────────────────────────────
 
-fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
+fn handle_normal_key(app: &mut App, code: KeyCode) {
     // While a command-output overlay is open, keys scroll or close it.
     if let Some(view) = app.output.as_mut() {
         match code {
@@ -156,160 +169,75 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
         }
         return;
     }
-    // While the help overlay is open, allow scrolling or close it.
-    if app.show_help {
-        match code {
-            KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => {
-                app.show_help = false;
-                app.help_scroll = 0;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.help_scroll = app.help_scroll.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.help_scroll = app.help_scroll.saturating_add(1);
-            }
-            KeyCode::PageUp => {
-                app.help_scroll = app.help_scroll.saturating_sub(10);
-            }
-            KeyCode::PageDown => {
-                app.help_scroll = app.help_scroll.saturating_add(10);
-            }
-            KeyCode::Home => app.help_scroll = 0,
-            KeyCode::End => app.help_scroll = usize::MAX,
-            _ => {}
-        }
-        return;
+
+    match app.page {
+        Page::Home => handle_home_key(app, code),
+        Page::Output => handle_output_key(app, code),
+        Page::Help => handle_help_key(app, code),
     }
-    // Keys handled the same regardless of which pane is focused.
+}
+
+/// Home page: bridge action shortcuts, or start typing a command.
+fn handle_home_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Char('q') => {
-            app.quit = true;
-            return;
-        }
-        KeyCode::Char('?') => {
-            app.show_help = true;
-            return;
-        }
+        KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
+        KeyCode::Char('?') => app.goto(Page::Help),
+        KeyCode::Tab | KeyCode::BackTab => app.goto(Page::Output),
         KeyCode::Char(':') => {
             app.mode = Mode::Command;
             app.input.clear();
-            return;
         }
-        KeyCode::Tab | KeyCode::BackTab => {
-            app.focus = match app.focus {
-                Focus::Table => {
-                    app.show_logs = true;
-                    Focus::Logs
-                }
-                Focus::Logs => Focus::Table,
-            };
-            app.status = focus_hint(app.focus);
-            return;
-        }
-        KeyCode::Char('l') => {
-            app.show_logs = !app.show_logs;
-            app.focus = if app.show_logs {
-                Focus::Logs
-            } else {
-                Focus::Table
-            };
-            app.log_scroll = 0;
-            return;
-        }
-        KeyCode::Char('a') => {
-            app.all_logs = !app.all_logs;
-            app.show_logs = true;
-            app.focus = Focus::Logs;
-            app.log_scroll = 0;
-            app.status = if app.all_logs {
-                "logs: all running instances (↑/↓ scroll, Tab/Esc back to table)".to_string()
-            } else {
-                "logs: selected instance".to_string()
-            };
-            return;
-        }
-        KeyCode::Char('s') => {
-            if let Some(row) = rows.get(app.selected) {
-                run_action(app, Action::Start(row.kind));
-            }
-            return;
-        }
-        KeyCode::Char('x') => {
-            if let Some(row) = rows.get(app.selected) {
-                run_action(app, Action::Stop(row.name.clone()));
-            }
-            return;
-        }
-        KeyCode::Char('r') => {
-            if let Some(row) = rows.get(app.selected) {
-                run_action(app, Action::Restart(row.name.clone(), row.kind));
-            }
-            return;
-        }
-        KeyCode::Char('y') => {
-            run_action(app, Action::Sync(None));
-            return;
-        }
+        KeyCode::Char('s') => run_action(app, Action::Start(ServiceKind::AtBridge)),
+        KeyCode::Char('x') => run_action(app, Action::Stop("bridge".to_string())),
+        KeyCode::Char('r') => run_action(
+            app,
+            Action::Restart("bridge".to_string(), ServiceKind::AtBridge),
+        ),
+        KeyCode::Char('y') => run_action(app, Action::Sync(None)),
         KeyCode::Char(c) => {
             app.mode = Mode::Command;
             app.input.clear();
             app.input.push(c);
-            return;
         }
         _ => {}
     }
+}
 
-    // Pane-specific navigation: arrows scroll the focused pane.
-    match app.focus {
-        Focus::Logs => match code {
-            KeyCode::Esc => {
-                app.focus = Focus::Table;
-                app.status = "focus returned to input".to_string();
-            }
-            KeyCode::Up | KeyCode::Char('k') => app.log_scroll = app.log_scroll.saturating_add(1),
-            KeyCode::Down | KeyCode::Char('j') => app.log_scroll = app.log_scroll.saturating_sub(1),
-            KeyCode::PageUp => app.log_scroll = app.log_scroll.saturating_add(10),
-            KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
-            KeyCode::Home => app.log_scroll = usize::MAX, // oldest
-            KeyCode::End => app.log_scroll = 0,           // newest
-            _ => {}
-        },
-        Focus::Table => match code {
-            KeyCode::Esc => {
-                if app.show_logs {
-                    app.show_logs = false;
-                    app.status = "logs closed".to_string();
-                } else {
-                    app.quit = true;
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.selected = app.selected.saturating_sub(1);
-                app.log_scroll = 0;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if app.selected + 1 < rows.len() {
-                    app.selected += 1;
-                    app.log_scroll = 0;
-                }
-            }
-            // PgUp/PgDn still scroll logs even from the table, for convenience.
-            KeyCode::PageUp => {
-                app.show_logs = true;
-                app.log_scroll = app.log_scroll.saturating_add(10);
-            }
-            KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
-            _ => {}
-        },
+/// Output page: scroll the live execution logs; Esc/Tab go back home.
+fn handle_output_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => app.goto(Page::Home),
+        KeyCode::Char('q') => app.quit = true,
+        KeyCode::Char('?') => app.goto(Page::Help),
+        // Bridge shortcuts still work here; output refreshes in place.
+        KeyCode::Char('s') => run_action(app, Action::Start(ServiceKind::AtBridge)),
+        KeyCode::Char('x') => run_action(app, Action::Stop("bridge".to_string())),
+        KeyCode::Char('r') => run_action(
+            app,
+            Action::Restart("bridge".to_string(), ServiceKind::AtBridge),
+        ),
+        KeyCode::Char('y') => run_action(app, Action::Sync(None)),
+        KeyCode::Up | KeyCode::Char('k') => app.log_scroll = app.log_scroll.saturating_add(1),
+        KeyCode::Down | KeyCode::Char('j') => app.log_scroll = app.log_scroll.saturating_sub(1),
+        KeyCode::PageUp => app.log_scroll = app.log_scroll.saturating_add(10),
+        KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
+        KeyCode::Home => app.log_scroll = usize::MAX, // oldest
+        KeyCode::End => app.log_scroll = 0,           // newest
+        _ => {}
     }
 }
 
-/// Status-line hint describing what the arrow keys do for the given focus.
-fn focus_hint(focus: Focus) -> String {
-    match focus {
-        Focus::Table => "focus: table (↑/↓ select · Tab → logs)".to_string(),
-        Focus::Logs => "focus: logs (↑/↓ scroll · Tab/Esc → table)".to_string(),
+/// Help page: scroll; Esc/q/? go back home.
+fn handle_help_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => app.goto(Page::Home),
+        KeyCode::Up | KeyCode::Char('k') => app.help_scroll = app.help_scroll.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => app.help_scroll = app.help_scroll.saturating_add(1),
+        KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(10),
+        KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
+        KeyCode::Home => app.help_scroll = 0,
+        KeyCode::End => app.help_scroll = usize::MAX,
+        _ => {}
     }
 }
 
@@ -345,9 +273,7 @@ enum Action {
 }
 
 fn run_action(app: &mut App, action: Action) {
-    app.show_logs = true;
-    app.focus = Focus::Logs;
-    app.log_scroll = 0;
+    app.goto(Page::Output);
     app.status = match action {
         Action::Start(kind) => match service::default_start(kind) {
             Ok(pid) => format!("started {} (pid {pid})", kind.name()),
@@ -377,10 +303,9 @@ fn run_action(app: &mut App, action: Action) {
 
 /// Parse and run a `:command` line.
 ///
-/// The dashboard keeps a few TUI-native conveniences (`select`, `logs all`,
-/// `restart`) and translates friendly aliases (`start`, `stop`, `sync`) into
-/// normal CLI commands. Everything else is passed through to this same `fbsy`
-/// binary, so the dashboard command bar can use the full CLI surface.
+/// Supports the bridge control aliases (`start`, `stop`, `restart`, `sync`,
+/// `logs`) plus passthrough to `install`/`uninstall`/`update` on this same
+/// `fbsy` binary. Anything else is rejected as unrecognized.
 fn execute_command(app: &mut App, line: &str) {
     let mut args = match split_command_line(line) {
         Ok(args) => args,
@@ -399,7 +324,7 @@ fn execute_command(app: &mut App, line: &str) {
 
     match args[0].as_str() {
         "help" | "?" => {
-            app.show_help = true;
+            app.goto(Page::Help);
             return;
         }
         "quit" | "q" | "exit" => {
@@ -426,13 +351,23 @@ fn execute_command(app: &mut App, line: &str) {
             return;
         }
         "l" | "logs" => {
-            app.show_logs = !app.show_logs;
-            app.log_scroll = 0;
-            app.status = if app.show_logs {
-                "logs pane opened".to_string()
-            } else {
-                "logs pane closed".to_string()
-            };
+            app.goto(Page::Output);
+            app.status = "execution output — Esc goes back home".to_string();
+            return;
+        }
+        "home" | "h" => {
+            app.goto(Page::Home);
+            app.status = "home".to_string();
+            return;
+        }
+        "setup" | "config" => {
+            app.pending_attach = Some(AttachedTask::Setup);
+            app.status = "leaving dashboard for the setup wizard".to_string();
+            return;
+        }
+        "scan" => {
+            app.pending_attach = Some(AttachedTask::Scan);
+            app.status = "leaving dashboard to scan the local network".to_string();
             return;
         }
         "install" | "uninstall" | "update" => {
@@ -445,7 +380,7 @@ fn execute_command(app: &mut App, line: &str) {
     }
 
     if should_run_attached(&args) {
-        app.pending_attach = Some(args);
+        app.pending_attach = Some(AttachedTask::Cli(args));
         app.status = "leaving dashboard temporarily for an interactive command".to_string();
     } else {
         app.output = Some(run_captured(&args));
@@ -516,35 +451,51 @@ fn run_captured(args: &[String]) -> OutputView {
 
 fn run_attached(
     terminal: &mut ratatui::DefaultTerminal,
-    args: &[String],
+    task: AttachedTask,
     status_text: &mut String,
 ) {
     ratatui::restore();
     println!();
-    println!("$ fbsy {}", display_args(args));
-    println!();
 
-    let status = std::env::current_exe()
-        .context("locate current executable")
-        .and_then(|exe| {
-            Command::new(exe)
-                .args(args)
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()
-                .context("run attached command")
-        });
-
-    match status {
-        Ok(status) if status.success() => {
-            *status_text = format!("fbsy {} completed", display_args(args));
+    match task {
+        AttachedTask::Cli(args) => {
+            println!("$ fbsy {}", display_args(&args));
+            println!();
+            let status = std::env::current_exe()
+                .context("locate current executable")
+                .and_then(|exe| {
+                    Command::new(exe)
+                        .args(&args)
+                        .stdin(Stdio::inherit())
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .status()
+                        .context("run attached command")
+                });
+            match status {
+                Ok(status) if status.success() => {
+                    *status_text = format!("fbsy {} completed", display_args(&args));
+                }
+                Ok(status) => {
+                    *status_text = format!("fbsy {} exited with {status}", display_args(&args));
+                }
+                Err(err) => {
+                    *status_text = format!("could not run fbsy {}: {err}", display_args(&args));
+                }
+            }
         }
-        Ok(status) => {
-            *status_text = format!("fbsy {} exited with {status}", display_args(args));
+        AttachedTask::Setup => {
+            *status_text = match crate::application::setup::run() {
+                Ok(()) => "setup finished — restart the bridge to apply changes".to_string(),
+                Err(err) => format!("setup failed: {err}"),
+            };
         }
-        Err(err) => {
-            *status_text = format!("could not run fbsy {}: {err}", display_args(args));
+        AttachedTask::Scan => {
+            let opts = crate::application::scanner::ScanOptions::default();
+            *status_text = match crate::application::scanner::run_scan(opts) {
+                Ok(()) => "scan finished".to_string(),
+                Err(err) => format!("scan failed: {err}"),
+            };
         }
     }
 
@@ -608,7 +559,7 @@ fn display_args(args: &[String]) -> String {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
+fn draw(frame: &mut Frame, app: &App, bridge: &ServiceStatus, sync_line: &str) {
     let area = frame.area();
     if area.width < 60 || area.height < 12 {
         let msg = format!(
@@ -625,12 +576,6 @@ fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
         return;
     }
 
-    let log_constraint = if app.show_logs {
-        Constraint::Min(8)
-    } else {
-        Constraint::Length(0)
-    };
-
     // Centering horizontal split (Codex Page width: 75% of screen, capped at 96 columns)
     let page_width = (area.width * 75 / 100).clamp(60, 96);
     let horizontal_padding = area.width.saturating_sub(page_width) / 2;
@@ -643,66 +588,75 @@ fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
 
     let active_area = page_areas[1];
 
-    let areas = if app.show_logs {
-        let splits = Layout::vertical([
-            Constraint::Length(6), // logo block (fbsy block letters)
-            Constraint::Length(1), // spacing
-            Constraint::Length(4), // prompt input box (ChatGPT/OpenCode style)
-            Constraint::Length(1), // spacing / guides row
-            log_constraint,        // log pane (execution output)
-            Constraint::Length(1), // footer line (~ and version)
-        ])
-        .split(active_area);
-        vec![
-            splits[0], splits[1], splits[2], splits[3], splits[4], splits[5],
-        ]
-    } else {
-        let total_height = active_area.height;
-        let content_height = 6 + 1 + 4 + 1; // Logo(6) + Spacing(1) + Input(4) + Guides/Spacing(1) = 12
-        let top_padding = total_height.saturating_sub(content_height + 1) / 2; // +1 for footer line
-
-        let vertical_splits = Layout::vertical([
-            Constraint::Length(top_padding),
-            Constraint::Length(6), // logo (index 1)
-            Constraint::Length(1), // spacing (index 2)
-            Constraint::Length(4), // input (index 3)
-            Constraint::Length(1), // guides (index 4)
-            Constraint::Min(1),    // bottom padding + footer (index 5)
-        ])
-        .split(active_area);
-
-        let footer_area = Rect {
-            x: active_area.x,
-            y: active_area.y + active_area.height.saturating_sub(1),
-            width: active_area.width,
-            height: 1,
-        };
-
-        vec![
-            vertical_splits[1], // areas[0] = logo
-            vertical_splits[2], // areas[1] = spacing
-            vertical_splits[3], // areas[2] = input
-            vertical_splits[4], // areas[3] = guides
-            Rect::default(),    // areas[4] = logs (unused)
-            footer_area,        // areas[5] = footer
-        ]
-    };
-
-    draw_logo(frame, areas[0]);
-    draw_status(frame, areas[2], app, rows);
-    draw_guides(frame, areas[3], app);
-    if app.show_logs {
-        draw_logs(frame, areas[4], app, rows);
+    match app.page {
+        Page::Home => draw_home_page(frame, active_area, app, bridge, sync_line),
+        Page::Output => draw_output_page(frame, active_area, app, bridge, sync_line),
+        Page::Help => draw_help(frame, frame.area(), app),
     }
-    draw_footer(frame, areas[5]);
 
-    // The help overlay floats above everything else.
+    // A captured passthrough command's output floats above everything else.
     if let Some(view) = &app.output {
         draw_output(frame, frame.area(), view);
     }
-    if app.show_help {
-        draw_help(frame, frame.area(), app);
-    }
+}
+
+/// Home page: vertically centered logo, prompt card, and guide tags.
+fn draw_home_page(
+    frame: &mut Frame,
+    active_area: Rect,
+    app: &App,
+    bridge: &ServiceStatus,
+    sync_line: &str,
+) {
+    let content_height = 6 + 1 + 5 + 1; // Logo(6) + Spacing(1) + Input(5) + Guides(1)
+    let top_padding = active_area
+        .height
+        .saturating_sub(content_height + 1) // +1 for footer line
+        / 2;
+
+    let splits = Layout::vertical([
+        Constraint::Length(top_padding),
+        Constraint::Length(6), // logo
+        Constraint::Length(1), // spacing
+        Constraint::Length(5), // prompt input box
+        Constraint::Length(1), // guides
+        Constraint::Min(1),    // bottom padding
+    ])
+    .split(active_area);
+
+    let footer_area = Rect {
+        x: active_area.x,
+        y: active_area.y + active_area.height.saturating_sub(1),
+        width: active_area.width,
+        height: 1,
+    };
+
+    draw_logo(frame, splits[1]);
+    draw_status(frame, splits[3], app, bridge, sync_line);
+    draw_guides(frame, splits[4], app);
+    draw_footer(frame, footer_area);
+}
+
+/// Output page: status header, full-height execution logs, guides, footer.
+fn draw_output_page(
+    frame: &mut Frame,
+    active_area: Rect,
+    app: &App,
+    bridge: &ServiceStatus,
+    sync_line: &str,
+) {
+    let splits = Layout::vertical([
+        Constraint::Length(5), // prompt/status card stays on top
+        Constraint::Length(1), // guides row
+        Constraint::Min(8),    // execution logs take the rest
+        Constraint::Length(1), // footer
+    ])
+    .split(active_area);
+
+    draw_status(frame, splits[0], app, bridge, sync_line);
+    draw_guides(frame, splits[1], app);
+    draw_logs(frame, splits[2], app);
+    draw_footer(frame, splits[3]);
 }
 
 /// Full help: dashboard shortcuts, aliases, and the CLI passthrough model.
@@ -726,71 +680,42 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
     };
 
     let lines = vec![
+        Line::from(vec![Span::styled(" Pages", yellow)]),
+        row("Home", "logo + prompt; where you launch commands from"),
+        row("Output", "live execution logs; opens whenever a command runs"),
+        row("Help", "this page"),
+        row("Tab", "home ⇄ output page"),
+        row("Esc", "go back home (from home: quit)"),
+        separator(),
         Line::from(vec![Span::styled(" Single-key shortcuts", yellow)]),
-        row("Tab", "switch focus: service table ⇄ log pane"),
-        row("↑/↓ or j/k", "table focus: select · log focus: scroll"),
-        row("s", "start selected service (default name + port)"),
-        row("x", "stop selected instance"),
-        row("r", "restart selected instance"),
+        row("s", "start the bridge service (opens output page)"),
+        row("x", "stop the bridge service"),
+        row("r", "restart the bridge service"),
         row("y", "run a one-off sync now"),
-        row("l", "toggle the log pane (and focus it)"),
-        row("a", "logs from ALL running instances, time-merged"),
-        row("PgUp / PgDn", "scroll log pane older / newer"),
+        row("↑/↓ or j/k", "output page: scroll logs"),
+        row("PgUp / PgDn", "scroll logs older / newer"),
         row("Home / End", "jump to oldest / newest log lines"),
-        row("Esc", "log focus → table · table focus → quit"),
         row("? / q", "this help / quit"),
         separator(),
-        Line::from(vec![Span::styled(
-            " Command bar passthrough  (press : then type)",
-            yellow,
-        )]),
+        Line::from(vec![Span::styled(" Command bar", yellow)]),
         Line::from(vec![
-            "  Type any normal CLI command ".into(),
-            Span::styled("without", yellow),
-            " the `fbsy` prefix.".into(),
+            "  Type a command, or press ".into(),
+            Span::styled(":", cyan),
+            " first.".into(),
         ]),
-        row("show", "same as `fbsy show`"),
-        row("scan --all-ports", "discover network services & devices"),
-        row("bridge doctor --json", "captures command output here"),
-        row(
-            "bridge devices info CODE --users",
-            "deep diagnostics also work",
-        ),
-        row(
-            "bridge config setup",
-            "suspends TUI for the interactive wizard",
-        ),
-        separator(),
-        Line::from(vec![Span::styled(" Dashboard aliases", yellow)]),
-        row("start <kind> [flags]", "alias for `run <kind> [flags]`"),
-        row("stop <instance>", "alias for `close <instance>`"),
-        row("restart <instance>", "dashboard-only restart helper"),
-        row(
-            "sync [deviceCode]",
-            "alias for `bridge sync --once [--device CODE]`",
-        ),
-        row("logs all", "dashboard-only combined log view"),
-        row("select <instance>", "move the highlight"),
-        separator(),
-        Line::from(vec![Span::styled(" Running multiple instances", yellow)]),
-        Line::from(vec![
-            "  ".into(),
-            Span::styled("start zkteco --name dev1 --port 4370", cyan),
-        ]),
-        Line::from(vec![
-            "  ".into(),
-            Span::styled("start zkteco --name dev2 --port 4371", cyan),
-            "   ".into(),
-            Span::styled("← a 2nd mock device", dim),
-        ]),
-        Line::from(vec![
-            "  ".into(),
-            Span::styled("start bridge --config /path/config.json", cyan),
-        ]),
-        Line::from(vec![
-            "  ".into(),
-            Span::styled("start scanner --interval 300", cyan),
-        ]),
+        row("start / s", "start the bridge service"),
+        row("stop / x", "stop the bridge service"),
+        row("restart / r", "restart the bridge service"),
+        row("sync / y", "run a one-off sync now"),
+        row("setup", "configure HRMS connection and devices (wizard)"),
+        row("scan", "discover biometric devices on the local network"),
+        row("logs / l", "open the output page"),
+        row("home / h", "go back to the home page"),
+        row("help / ?", "open this help page"),
+        row("install", "run `fbsy install` (attached)"),
+        row("uninstall", "run `fbsy uninstall` (attached)"),
+        row("update", "run `fbsy update` (attached, unless --check/--yes/--auto)"),
+        row("quit / q", "exit the dashboard"),
     ];
 
     let visible = area.height.saturating_sub(2) as usize;
@@ -798,9 +723,9 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
     let scroll = app.help_scroll.min(max_scroll).min(u16::MAX as usize) as u16;
 
     let title = if max_scroll > 0 {
-        format!(" help ({}/{max_scroll}) — ↑/↓ scroll · Esc close ", scroll)
+        format!(" help ({}/{max_scroll}) — ↑/↓ scroll · Esc home ", scroll)
     } else {
-        " help — Esc close ".to_string()
+        " help — Esc home ".to_string()
     };
 
     frame.render_widget(Clear, area);
@@ -875,14 +800,14 @@ fn draw_logo(frame: &mut Frame, area: Rect) {
 fn draw_guides(frame: &mut Frame, area: Rect, app: &App) {
     let dim = Color::Rgb(100, 100, 100);
     let cyan = Color::Rgb(16, 163, 127);
-    let spans = if app.focus == Focus::Logs && app.show_logs {
+    let spans = if app.page == Page::Output {
         vec![
             Span::styled("Esc ", Style::default().fg(cyan).bold()),
-            Span::styled("input  ", Style::default().fg(dim)),
+            Span::styled("home  ", Style::default().fg(dim)),
             Span::styled("↑/↓ ", Style::default().fg(cyan).bold()),
             Span::styled("scroll  ", Style::default().fg(dim)),
-            Span::styled("l ", Style::default().fg(cyan).bold()),
-            Span::styled("hide logs  ", Style::default().fg(dim)),
+            Span::styled("? ", Style::default().fg(cyan).bold()),
+            Span::styled("help  ", Style::default().fg(dim)),
             Span::styled("q ", Style::default().fg(cyan).bold()),
             Span::styled("quit", Style::default().fg(dim)),
         ]
@@ -919,18 +844,10 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(line)), area);
 }
 
-fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
+fn draw_logs(frame: &mut Frame, area: Rect, app: &App) {
     let visible = area.height.saturating_sub(2).max(1) as usize;
-    let lines = if app.all_logs {
-        service::tail_all_running(LOG_TAIL)
-    } else {
-        let name = rows
-            .get(app.selected)
-            .map(|r| r.name.as_str())
-            .unwrap_or(ServiceKind::AtBridge.name());
-        let log_path = paths::service_log_path(name);
-        service::tail_lines(&log_path, LOG_TAIL)
-    };
+    let log_path = paths::service_log_path(ServiceKind::AtBridge.name());
+    let lines = service::tail_lines(&log_path, LOG_TAIL);
 
     let green = Color::Rgb(16, 163, 127);
     let (start, end, scroll, max_scroll) = log_window_bounds(lines.len(), visible, app.log_scroll);
@@ -949,7 +866,10 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
                         line.clone(),
                         Style::default().fg(Color::Yellow),
                     ))
-                } else if line.len() > 30 && line.chars().next().unwrap_or(' ').is_numeric() {
+                } else if line.len() > 30
+                    && line.chars().next().unwrap_or(' ').is_numeric()
+                    && line.is_char_boundary(30)
+                {
                     let (ts, rest) = line.split_at(30);
                     let rest_spans = if rest.contains("INFO") {
                         vec![
@@ -983,18 +903,8 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
         format!(" [{}/{}] ", scroll, max_scroll)
     };
 
-    let focused = app.focus == Focus::Logs;
-    let border_style = if focused {
-        Style::default().fg(green)
-    } else {
-        Style::default().fg(Color::Rgb(60, 60, 60))
-    };
-    let title = format!(
-        " {}{}{} ",
-        title_base,
-        if focused { " (focus)" } else { "" },
-        scroll_label
-    );
+    let border_style = Style::default().fg(green);
+    let title = format!(" {}{} ", title_base, scroll_label);
     let para = Paragraph::new(shown).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1020,22 +930,18 @@ fn log_window_bounds(
     (start, end, scroll, max_scroll)
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
+fn draw_status(frame: &mut Frame, area: Rect, app: &App, bridge: &ServiceStatus, sync_line: &str) {
     let blue = Color::Rgb(59, 130, 246);
     let orange = Color::Rgb(245, 158, 11);
     let dark_bg = Color::Rgb(25, 26, 27);
     let dim = Color::Rgb(120, 120, 120);
 
-    let (status_text, is_active) = if let Some(bridge) = rows.iter().find(|r| r.name == "bridge") {
-        if bridge.running {
-            let pid_str = bridge
-                .pid
-                .map(|p| format!(" (PID: {})", p))
-                .unwrap_or_default();
-            (format!("AtBridge ● ACTIVE{}", pid_str), true)
-        } else {
-            ("AtBridge ● OFFLINE".to_string(), false)
-        }
+    let (status_text, is_active) = if bridge.running {
+        let pid_str = bridge
+            .pid
+            .map(|p| format!(" (PID: {})", p))
+            .unwrap_or_default();
+        (format!("AtBridge ● ACTIVE{}", pid_str), true)
     } else {
         ("AtBridge ● OFFLINE".to_string(), false)
     };
@@ -1043,9 +949,9 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus])
     let sync_status = if is_active { "active" } else { "idle" };
 
     let placeholder = if area.width < 75 {
-        "Ask anything... \"s: start · l: logs · q: quit\""
+        "Ask anything... \"s: start · tab: logs · q: quit\""
     } else {
-        "Ask anything... \"s to start bridge · l to view logs · q to quit\""
+        "Ask anything... \"s to start bridge · tab to view logs · q to quit\""
     };
 
     let prompt_line = match app.mode {
@@ -1081,6 +987,11 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus])
         Span::styled(sync_status, Style::default().fg(orange).bold()),
     ]);
 
+    let sync_info_line = Line::from(vec![
+        Span::styled(" ┃ ", Style::default().fg(blue).bold()),
+        Span::styled(sync_line.to_string(), Style::default().fg(dim)),
+    ]);
+
     let border_color = if app.mode == Mode::Command {
         blue
     } else {
@@ -1092,15 +1003,71 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus])
         .border_style(Style::default().fg(border_color))
         .bg(dark_bg);
 
-    let para = Paragraph::new(vec![prompt_line, details_line]).block(block);
+    let para = Paragraph::new(vec![prompt_line, details_line, sync_info_line]).block(block);
 
     frame.render_widget(para, area);
 }
 
-fn dashboard_rows(mut rows: Vec<ServiceStatus>) -> Vec<ServiceStatus> {
-    rows.retain(|row| row.name == "bridge");
-    if rows.is_empty() {
-        rows.push(ServiceStatus {
+/// One-line summary of the most recent sync across configured devices, read
+/// from the persisted per-device state files. Also the home page's hint about
+/// what to do next when nothing is configured yet.
+fn last_sync_summary() -> String {
+    use crate::{adapters::config_file::JsonConfigStore, ports::config_store::ConfigStore};
+
+    let path = paths::default_config_path();
+    if !path.exists() {
+        return "no config yet — type setup to connect your device and HRMS".to_string();
+    }
+    let Ok(cfg) = JsonConfigStore.load(&path) else {
+        return "config invalid — type setup to reconfigure".to_string();
+    };
+    if cfg.devices.is_empty() {
+        return "no devices configured — type setup to add one".to_string();
+    }
+
+    let mut latest: Option<crate::domain::SyncResult> = None;
+    for device in &cfg.devices {
+        if let Some(result) = crate::runtime::sync_state::load_last_result(&device.device_code) {
+            let newer = latest
+                .as_ref()
+                .is_none_or(|cur| result.started_at > cur.started_at);
+            if newer {
+                latest = Some(result);
+            }
+        }
+    }
+
+    match latest {
+        None => format!(
+            "{} device(s) configured · no sync yet — press s to start the bridge",
+            cfg.devices.len()
+        ),
+        Some(result) => {
+            let ago = chrono::DateTime::parse_from_rfc3339(&result.started_at)
+                .map(|t| {
+                    let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds();
+                    match secs {
+                        s if s < 0 => "just now".to_string(),
+                        s if s < 60 => format!("{s}s ago"),
+                        s if s < 3600 => format!("{}m ago", s / 60),
+                        s if s < 86400 => format!("{}h ago", s / 3600),
+                        s => format!("{}d ago", s / 86400),
+                    }
+                })
+                .unwrap_or_else(|_| "time unknown".to_string());
+            let mark = if result.ok { "✓" } else { "✗" };
+            format!(
+                "last sync {mark} {} · pulled {} · forwarded {} · {ago}",
+                result.device_code, result.pulled, result.forwarded
+            )
+        }
+    }
+}
+
+fn bridge_status(rows: Vec<ServiceStatus>) -> ServiceStatus {
+    rows.into_iter()
+        .find(|row| row.name == "bridge")
+        .unwrap_or(ServiceStatus {
             name: "bridge".to_string(),
             kind: ServiceKind::AtBridge,
             running: false,
@@ -1108,9 +1075,7 @@ fn dashboard_rows(mut rows: Vec<ServiceStatus>) -> Vec<ServiceStatus> {
             port: None,
             url: None,
             uptime_secs: None,
-        });
-    }
-    rows
+        })
 }
 
 #[cfg(test)]

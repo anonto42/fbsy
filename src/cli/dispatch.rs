@@ -1,5 +1,7 @@
 //! CLI dispatch: route a parsed command into the application layer.
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::CommandFactory;
 
@@ -11,7 +13,12 @@ use super::{args::Cli, command::Command};
 pub fn run(cli: Cli) -> Result<()> {
     let command = match cli.command {
         Some(command) => command,
+        // Bare `fbsy` opens the dashboard. When there is no interactive
+        // terminal (scripts, pipes), fall back to printing help instead.
         None => {
+            if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+                return application::dashboard::run();
+            }
             let mut cmd = Cli::command();
             cmd.print_help()?;
             println!();

@@ -6,7 +6,10 @@
 //!   - Linux/macOS: ~/.local/bin/fbsy
 //!   - Windows:     %LOCALAPPDATA%\Programs\fbsy\fbsy.exe
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use console::style;
@@ -43,10 +46,35 @@ pub fn install() -> Result<()> {
 
     ensure_on_path(dst.parent().unwrap_or(&dst));
 
+    // First-time install: no config yet means the bridge can't do anything.
+    // Offer the setup wizard right away so install → configured is one step.
+    let config_path = paths::default_config_path();
+    if !config_path.exists() && std::io::stdin().is_terminal() {
+        println!();
+        println!(
+            "{} No bridge configuration found yet.",
+            style("!").yellow().bold()
+        );
+        let run_setup = dialoguer::Confirm::new()
+            .with_prompt("Run the setup wizard now to connect your device and HRMS?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if run_setup {
+            crate::application::setup::run()?;
+        } else {
+            println!(
+                "You can configure later from the dashboard: run {} and type {}",
+                style("fbsy dashboard").cyan(),
+                style("setup").cyan()
+            );
+        }
+    }
+
     println!();
     println!(
         "Next: open a new shell, then run {}",
-        style("fbsy --help").cyan()
+        style("fbsy dashboard").cyan()
     );
     Ok(())
 }
