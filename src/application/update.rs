@@ -224,11 +224,37 @@ fn restart_services(exe: &Path, running: &Running) -> Result<()> {
         let _ = registry::clear(name);
         wait_for_exit(*old_pid);
 
+        // An OS-supervised instance (boot auto-start) is respawned by
+        // launchd/systemd/schtasks itself — from the already-replaced binary.
+        // Spawning our own copy here would collide on the port; instead wait
+        // for the supervisor's replacement to self-register.
+        if crate::application::autostart::status(name).installed {
+            crate::application::autostart::kick(name);
+            wait_for_supervised_restart(name)
+                .with_context(|| format!("supervised {name} did not come back"))?;
+            diag(&format!("supervisor restarted {name} ({})", kind.name()));
+            continue;
+        }
+
         service::spawn_service_with_exe(exe, *kind, name, *port, args)
             .with_context(|| format!("restart {name} ({})", kind.name()))?;
         diag(&format!("restarted {name} ({})", kind.name()));
     }
     Ok(())
+}
+
+/// Wait for the OS supervisor to respawn an instance and for it to
+/// self-register with a live pid.
+fn wait_for_supervised_restart(name: &str) -> Result<()> {
+    for _ in 0..60 {
+        if let Ok(Some(entry)) = registry::read(name) {
+            if process::is_alive(entry.pid, Some(&entry.exe)) {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    bail!("not registered after 30s")
 }
 
 /// Wait briefly for a pid to exit (so its port is freed) before respawning.

@@ -99,6 +99,11 @@ fn collect_config() -> Result<BridgeConfig> {
         .default(true)
         .interact()?;
 
+    let auto_update = Confirm::new()
+        .with_prompt("Automatically install fbsy updates when a new release is out?")
+        .default(true)
+        .interact()?;
+
     let enable_jobs = Confirm::new()
         .with_prompt("Enable HRMS job polling?")
         .default(false)
@@ -176,7 +181,7 @@ fn collect_config() -> Result<BridgeConfig> {
         hrms_base_url,
         hrms_api_token,
         job_poll_interval_seconds,
-        auto_update: false,
+        auto_update,
         update_check_interval_hours: 6,
         devices,
         sense_face,

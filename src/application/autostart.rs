@@ -86,6 +86,20 @@ pub fn remove_quiet(name: &str) -> Result<()> {
     remove_unit(name)
 }
 
+/// Ask the OS supervisor to (re)start the instance now. launchd (KeepAlive)
+/// and systemd (Restart=always) respawn killed processes on their own, so
+/// this is only needed on Windows, where an ONLOGON task must be re-fired.
+pub fn kick(name: &str) {
+    #[cfg(windows)]
+    {
+        let _ = run_cmd("schtasks", &["/run", "/tn", &task_name(name)]);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name; // unix supervisors respawn automatically
+    }
+}
+
 /// Stop, disable-at-boot, and remove the boot unit for `name`.
 pub fn disable(name: &str) -> Result<()> {
     ServiceKind::from_name(name)
