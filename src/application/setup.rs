@@ -62,9 +62,7 @@ pub fn run_at(path: PathBuf) -> Result<()> {
         style("s").cyan(),
         style("start").cyan()
     );
-    println!(
-        "  3. Watch it sync:       the output page shows pulled/forwarded events live",
-    );
+    println!("  3. Watch it sync:       the output page shows pulled/forwarded events live",);
     Ok(())
 }
 
@@ -626,5 +624,4 @@ mod tests {
         assert_eq!(mock_api_key(1), "mock-key");
         assert_eq!(mock_api_key(2), "mock-key-02");
     }
-
 }

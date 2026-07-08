@@ -667,11 +667,36 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
             ),
         ]),
         Line::default(),
-        pair("start  s", "start the bridge service", "setup", "configure HRMS & devices"),
-        pair("stop   x", "stop the bridge service", "status", "show bridge + boot status"),
-        pair("restart r", "restart the bridge service", "update", "install the newest release"),
-        pair("sync   y", "sync attendance once now", "help  ?", "open the help page"),
-        pair("logs   tab", "open the output page", "quit   q", "exit the dashboard"),
+        pair(
+            "start  s",
+            "start the bridge service",
+            "setup",
+            "configure HRMS & devices",
+        ),
+        pair(
+            "stop   x",
+            "stop the bridge service",
+            "status",
+            "show bridge + boot status",
+        ),
+        pair(
+            "restart r",
+            "restart the bridge service",
+            "update",
+            "install the newest release",
+        ),
+        pair(
+            "sync   y",
+            "sync attendance once now",
+            "help  ?",
+            "open the help page",
+        ),
+        pair(
+            "logs   tab",
+            "open the output page",
+            "quit   q",
+            "exit the dashboard",
+        ),
     ];
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -722,7 +747,10 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
     let lines = vec![
         Line::from(vec![Span::styled(" Pages", yellow)]),
         row("Home", "logo + prompt; where you launch commands from"),
-        row("Output", "live execution logs; opens whenever a command runs"),
+        row(
+            "Output",
+            "live execution logs; opens whenever a command runs",
+        ),
         row("Help", "this page"),
         row("Tab", "home ⇄ output page"),
         row("Esc", "go back home (from home: quit)"),
@@ -753,7 +781,10 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
         row("help / ?", "open this help page"),
         row("install", "run `fbsy install` (attached)"),
         row("uninstall", "run `fbsy uninstall` (attached)"),
-        row("update", "run `fbsy update` (attached, unless --check/--yes/--auto)"),
+        row(
+            "update",
+            "run `fbsy update` (attached, unless --check/--yes/--auto)",
+        ),
         row("quit / q", "exit the dashboard"),
     ];
 

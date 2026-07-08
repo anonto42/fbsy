@@ -18,11 +18,8 @@ use anyhow::{bail, Context, Result};
 use console::style;
 
 use crate::{
-    adapters::config_file::JsonConfigStore,
-    application::service,
-    ports::config_store::ConfigStore,
-    services::ServiceKind,
-    support::paths,
+    adapters::config_file::JsonConfigStore, application::service, ports::config_store::ConfigStore,
+    services::ServiceKind, support::paths,
 };
 
 /// Whether a boot unit is installed for an instance.
@@ -226,8 +223,7 @@ fn ensure_bridge_config_ready(path: &Path) -> Result<()> {
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
     let path = unit_path(&ctx.name);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     std::fs::write(&path, systemd_unit(ctx))
         .with_context(|| format!("write unit {}", path.display()))?;
@@ -270,8 +266,7 @@ fn service_unit(name: &str) -> String {
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
     let path = unit_path(&ctx.name);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     std::fs::write(&path, launchd_plist(ctx))
         .with_context(|| format!("write plist {}", path.display()))?;
