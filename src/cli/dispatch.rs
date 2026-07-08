@@ -35,6 +35,34 @@ pub fn run(cli: Cli) -> Result<()> {
             auto: args.auto,
         }),
         Command::Dashboard => application::dashboard::run(),
+        Command::Setup => application::setup::run(),
+        Command::Start => {
+            let pid = application::service::default_start(crate::services::ServiceKind::AtBridge)?;
+            println!("started bridge (pid {pid})");
+            Ok(())
+        }
+        Command::Stop => {
+            if application::service::stop_instance("bridge")? {
+                println!("stopped bridge");
+            } else {
+                println!("bridge was not running");
+            }
+            Ok(())
+        }
+        Command::Restart => {
+            let pid = match application::service::restart_instance("bridge") {
+                Ok(pid) => pid,
+                // Not running yet: restart degrades to a plain start.
+                Err(_) => {
+                    application::service::default_start(crate::services::ServiceKind::AtBridge)?
+                }
+            };
+            println!("bridge running (pid {pid})");
+            Ok(())
+        }
+        Command::Sync(args) => application::sync_once::run(args.config, args.device),
+        Command::Status => application::service::show(),
+        Command::Logs(args) => application::service::logs("bridge", args.lines, args.follow),
 
         Command::ServiceRun(args) => application::service::exec_internal(&args.service, &args.rest),
         Command::ServiceSupervised(args) => {

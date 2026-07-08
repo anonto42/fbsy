@@ -68,41 +68,8 @@ pub fn run_at(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Write a ready-to-run local mock testing config with no interactive prompts.
-pub fn run_local_at(path: PathBuf, force: bool) -> Result<()> {
-    println!("{}", style("FingerBridge Local Test Setup").cyan().bold());
-    println!("Config path: {}", style(path.display()).yellow());
-    println!();
-
-    if path.exists() && !force {
-        println!(
-            "{} Config already exists. Re-run with {} to replace it.",
-            style("!").yellow().bold(),
-            style("--force").cyan()
-        );
-        print_local_test_commands();
-        return Ok(());
-    }
-
-    let cfg = local_test_config();
-    cfg.validate()?;
-    backup_existing_config(&path)?;
-    save_config_atomically(&path, &cfg)?;
-
-    println!();
-    println!("{}", style("Local test config is ready.").green().bold());
-    print_local_test_commands();
-    Ok(())
-}
-
 fn collect_config() -> Result<BridgeConfig> {
     let lan_host = network::lan_host_or_loopback();
-    println!("{}", style("Tip for mock testing:").yellow().bold());
-    println!(
-        "  If you started {} and {}, the defaults below should work.",
-        style("fbsy run hrms").cyan(),
-        style("fbsy run zkteco").cyan()
-    );
     println!(
         "  A device unique code is an HRMS/bridge identifier you choose, not the ZKTeco serial."
     );
@@ -214,57 +181,6 @@ fn collect_config() -> Result<BridgeConfig> {
         devices,
         sense_face,
     })
-}
-
-fn local_test_config() -> BridgeConfig {
-    BridgeConfig {
-        bridge_mode: BridgeMode::Pull,
-        vps_webhook_url: "http://127.0.0.1:18800/webhook".to_string(),
-        bridge_port: 7431,
-        auto_start_on_boot: false,
-        hrms_base_url: None,
-        hrms_api_token: None,
-        job_poll_interval_seconds: 30,
-        auto_update: false,
-        update_check_interval_hours: 6,
-        devices: vec![BridgeDeviceConfig {
-            device_ip: "127.0.0.1".to_string(),
-            device_port: 14370,
-            device_password: 0,
-            device_timeout: 15,
-            device_force_udp: false,
-            device_omit_ping: true,
-            device_timezone: None,
-            device_code: "MOCK-GATE-01".to_string(),
-            api_key: "mock-key".to_string(),
-            organization_id: 1,
-            sync_interval_seconds: 30,
-            clear_attendance_after_sync: false,
-            clear_attendance_threshold: None,
-        }],
-        sense_face: None,
-    }
-}
-
-fn print_local_test_commands() {
-    println!("{}", style("Run these in order:").underlined().bold());
-    println!(
-        "  1. {}",
-        style("fbsy run hrms --name local-hrms -p 18800").cyan()
-    );
-    println!(
-        "  2. {}",
-        style("fbsy run zkteco --name local-zkteco -p 14370 --records 5").cyan()
-    );
-    println!("  3. {}", style("fbsy run bridge").cyan());
-    println!();
-    println!("{}", style("Then verify:").underlined().bold());
-    println!(
-        "  - {}",
-        style("fbsy bridge sync --device MOCK-GATE-01").cyan()
-    );
-    println!("  - {}", style("fbsy logs local-hrms -n 80").cyan());
-    println!("  - {}", style("fbsy show").cyan());
 }
 
 fn collect_bridge_mode() -> Result<BridgeMode> {
@@ -655,10 +571,7 @@ fn save_config_atomically(path: &Path, cfg: &BridgeConfig) -> Result<()> {
 mod tests {
     use std::fs;
 
-    use super::{
-        backup_existing_config, local_test_config, mock_api_key, mock_device_code,
-        save_config_atomically,
-    };
+    use super::{backup_existing_config, mock_api_key, mock_device_code, save_config_atomically};
 
     #[test]
     fn atomic_save_writes_pretty_json() {
@@ -709,18 +622,4 @@ mod tests {
         assert_eq!(mock_api_key(2), "mock-key-02");
     }
 
-    #[test]
-    fn local_test_config_matches_mock_services() {
-        let cfg = local_test_config();
-
-        assert_eq!(cfg.vps_webhook_url, "http://127.0.0.1:18800/webhook");
-        assert!(!cfg.auto_start_on_boot);
-        assert_eq!(cfg.devices.len(), 1);
-        assert_eq!(cfg.devices[0].device_ip, "127.0.0.1");
-        assert_eq!(cfg.devices[0].device_port, 14370);
-        assert_eq!(cfg.devices[0].device_code, "MOCK-GATE-01");
-        assert_eq!(cfg.devices[0].api_key, "mock-key");
-        assert_eq!(cfg.devices[0].sync_interval_seconds, 30);
-        cfg.validate().expect("local test config validates");
-    }
 }

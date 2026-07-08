@@ -17,6 +17,20 @@ pub enum Command {
     Update(UpdateArgs),
     /// Live full-screen dashboard to monitor and control services.
     Dashboard,
+    /// Interactive setup wizard: configure HRMS connection and devices.
+    Setup,
+    /// Start the bridge service in the background.
+    Start,
+    /// Stop the running bridge service.
+    Stop,
+    /// Restart the bridge service.
+    Restart,
+    /// Pull attendance from devices and forward to HRMS once, then exit.
+    Sync(SyncArgs),
+    /// Show the bridge service status and last sync results.
+    Status,
+    /// Print the bridge service log (optionally follow).
+    Logs(LogsArgs),
 
     /// Internal entry point for detached service processes.
     #[command(name = "__service-run", hide = true)]
@@ -25,6 +39,30 @@ pub enum Command {
     /// Internal foreground entry point execed by OS boot units (self-registers).
     #[command(name = "__service-supervised", hide = true)]
     ServiceSupervised(ServiceRunArgs),
+}
+
+// ── sync ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct SyncArgs {
+    /// Sync only this device code (default: all configured devices).
+    #[arg(long)]
+    pub device: Option<String>,
+    /// Use a specific config file instead of the default location.
+    #[arg(long)]
+    pub config: Option<std::path::PathBuf>,
+}
+
+// ── logs ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct LogsArgs {
+    /// Number of lines to print from the end of the log.
+    #[arg(short = 'n', long, default_value_t = 100)]
+    pub lines: usize,
+    /// Keep printing new lines as they are written.
+    #[arg(short, long)]
+    pub follow: bool,
 }
 
 // ── uninstall ─────────────────────────────────────────────────────────────────

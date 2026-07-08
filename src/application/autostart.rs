@@ -1,25 +1,25 @@
-//! Boot persistence: register a service with the OS init system so it starts
-//! automatically at boot and restarts on crash.
+//! Boot persistence: register the bridge with the OS so it starts
+//! automatically at login/boot and restarts on crash.
 //!
-//! The detached-process model (`fbsy run`) does not survive a reboot — the OS
-//! kills the process on shutdown and nothing restarts it. `enable` installs a
-//! per-OS unit that runs the service in the **foreground** (so the init system
-//! supervises it) via the hidden `__service-supervised` entrypoint, which
-//! self-registers so `fbsy show`/`logs`/`status` keep working.
+//! The detached-process model (`fbsy start`) does not survive a reboot — the
+//! OS kills the process on shutdown and nothing restarts it. `enable` installs
+//! a **per-user** unit that runs the service in the foreground (so the init
+//! system supervises it) via the hidden `__service-supervised` entrypoint,
+//! which self-registers so `fbsy status`/`logs` keep working.
 //!
-//! Confirmed scope: **system-boot** units (no login required), which need
-//! elevation to install (sudo / Administrator).
+//! Everything here is per-user and needs **no sudo / Administrator**:
+//!   - macOS:   `~/Library/LaunchAgents/com.fbsy.<name>.plist` (RunAtLoad + KeepAlive)
+//!   - Linux:   `~/.config/systemd/user/fbsy-<name>.service` (systemctl --user)
+//!   - Windows: `schtasks /sc onlogon` task for the current user
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use console::style;
-use dialoguer::Confirm;
 
 use crate::{
     adapters::config_file::JsonConfigStore,
-    application::{self, service},
-    config::ConfigError,
+    application::service,
     ports::config_store::ConfigStore,
     services::ServiceKind,
     support::paths,
@@ -30,7 +30,7 @@ pub struct AutostartStatus {
     pub installed: bool,
 }
 
-/// Human label for `show`/`status` (`boot:on` / `-`).
+/// Human label for `status` (`boot:on` / `-`).
 pub fn status_label(name: &str) -> &'static str {
     if status(name).installed {
         "on"
@@ -39,70 +39,57 @@ pub fn status_label(name: &str) -> &'static str {
     }
 }
 
-/// Install and activate a boot unit for `name` (default kind: bridge).
-pub fn enable(name: &str, config: Option<PathBuf>) -> Result<()> {
+/// Install and activate a per-user boot unit for `name`, print-free (safe to
+/// call from inside the TUI). Stops any manually-run detached instance first;
+/// the supervised process takes over immediately and self-registers.
+pub fn install_quiet(name: &str, config: Option<PathBuf>) -> Result<()> {
     let kind = ServiceKind::from_name(name)
         .with_context(|| format!("unknown service '{name}' (try: bridge)"))?;
-    if kind != ServiceKind::AtBridge && kind != ServiceKind::Scanner {
-        bail!("only production services (bridge, scanner) can be enabled on boot, not '{name}'");
+    if kind != ServiceKind::AtBridge {
+        bail!("only the bridge service can be enabled on boot, not '{name}'");
     }
     let exe = std::env::current_exe().context("locate current executable")?;
 
-    if !is_elevated() {
-        // Resolve paths as the *real* user here (correct), and print the exact
-        // elevated command with --config baked in so the privileged run is
-        // unambiguous regardless of which account it lands in.
-        paths::ensure_dirs()?;
-        let _ = paths::migrate_legacy_config();
-        let cfg = absolute(&config.unwrap_or_else(paths::default_config_path));
-        if kind == ServiceKind::AtBridge {
-            ensure_bridge_config_ready(&cfg)?;
-        }
-        print_elevation_hint(&exe, name, &cfg);
-        bail!("administrator privileges are required to install a boot service");
-    }
+    paths::ensure_dirs()?;
+    let _ = paths::migrate_legacy_config();
+    let cfg = absolute(&config.unwrap_or_else(paths::default_config_path));
+    ensure_bridge_config_ready(&cfg)?;
 
-    // Elevated. On Unix `sudo` resets HOME to root, so the config path can't be
-    // auto-derived — require it explicitly (the non-root hint above supplies it).
-    let cfg = resolve_config_when_elevated(config)?;
-    let log = log_path_for(&cfg, name);
     let ctx = UnitCtx {
         name: name.to_string(),
         kind,
         exe,
         config: cfg,
-        log,
-        user: invoking_user(),
+        log: paths::service_log_path(name),
     };
 
     // A manually-run detached instance would hold the port; best-effort stop it.
     let _ = service::stop_instance(name);
 
-    install_unit(&ctx)?;
+    install_unit(&ctx)
+}
+
+/// Install and activate a per-user boot unit for `name` (default kind: bridge).
+pub fn enable(name: &str, config: Option<PathBuf>) -> Result<()> {
+    install_quiet(name, config)?;
     println!(
-        "{} {} will now start automatically on boot.",
+        "{} {} will now start automatically and restart if it crashes.",
         style("✔").green().bold(),
         style(name).cyan().bold()
     );
-    println!("  Inspect:  {}", inspect_hint(name));
-    println!("  Disable:  {} disable {name}", elevated_prefix());
+    println!("  Inspect: {}", inspect_hint(name));
     Ok(())
+}
+
+/// Remove the boot unit without printing (safe to call from inside the TUI).
+pub fn remove_quiet(name: &str) -> Result<()> {
+    remove_unit(name)
 }
 
 /// Stop, disable-at-boot, and remove the boot unit for `name`.
 pub fn disable(name: &str) -> Result<()> {
     ServiceKind::from_name(name)
         .with_context(|| format!("unknown service '{name}' (try: bridge)"))?;
-    if !is_elevated() {
-        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fbsy"));
-        eprintln!(
-            "{} Administrator privileges are required. Re-run:\n    {} {} disable {name}",
-            style("!").yellow().bold(),
-            sudo_word(),
-            exe.display()
-        );
-        bail!("administrator privileges are required to remove a boot service");
-    }
     remove_unit(name)?;
     println!(
         "{} {} will no longer start on boot.",
@@ -121,33 +108,25 @@ pub struct UnitCtx {
     pub exe: PathBuf,
     pub config: PathBuf,
     pub log: PathBuf,
-    pub user: Option<String>,
 }
 
-/// systemd system unit contents.
+/// systemd **user** unit contents.
 pub fn systemd_unit(ctx: &UnitCtx) -> String {
-    let user_line = ctx
-        .user
-        .as_deref()
-        .map(|u| format!("User={u}\n"))
-        .unwrap_or_default();
     format!(
         "[Unit]\n\
          Description=fbsy {name} (fingerbridge attendance service)\n\
          After=network-online.target\n\
-         Wants=network-online.target\n\
          \n\
          [Service]\n\
          Type=simple\n\
          ExecStart={exe} __service-supervised {name} --config {config}\n\
          Restart=always\n\
          RestartSec=3\n\
-         {user_line}\
          StandardOutput=append:{log}\n\
          StandardError=append:{log}\n\
          \n\
          [Install]\n\
-         WantedBy=multi-user.target\n",
+         WantedBy=default.target\n",
         name = ctx.name,
         exe = ctx.exe.display(),
         config = ctx.config.display(),
@@ -155,13 +134,8 @@ pub fn systemd_unit(ctx: &UnitCtx) -> String {
     )
 }
 
-/// launchd LaunchDaemon plist contents.
+/// launchd user LaunchAgent plist contents.
 pub fn launchd_plist(ctx: &UnitCtx) -> String {
-    let user_line = ctx
-        .user
-        .as_deref()
-        .map(|u| format!("  <key>UserName</key>\n  <string>{u}</string>\n"))
-        .unwrap_or_default();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -177,7 +151,6 @@ pub fn launchd_plist(ctx: &UnitCtx) -> String {
          \x20 </array>\n\
          \x20 <key>RunAtLoad</key>\n  <true/>\n\
          \x20 <key>KeepAlive</key>\n  <true/>\n\
-         {user_line}\
          \x20 <key>StandardOutPath</key>\n  <string>{log}</string>\n\
          \x20 <key>StandardErrorPath</key>\n  <string>{log}</string>\n\
          </dict>\n\
@@ -189,7 +162,8 @@ pub fn launchd_plist(ctx: &UnitCtx) -> String {
     )
 }
 
-/// `schtasks /create` arguments for a SYSTEM ONSTART task.
+/// `schtasks /create` arguments for an ONLOGON task as the current user
+/// (no Administrator shell needed).
 pub fn schtasks_create_args(ctx: &UnitCtx) -> Vec<String> {
     let run = format!(
         "\"{}\" __service-supervised {} --config \"{}\"",
@@ -204,27 +178,13 @@ pub fn schtasks_create_args(ctx: &UnitCtx) -> Vec<String> {
         "/tr".into(),
         run,
         "/sc".into(),
-        "onstart".into(),
-        "/ru".into(),
-        "SYSTEM".into(),
-        "/rl".into(),
-        "highest".into(),
+        "onlogon".into(),
         "/f".into(),
     ]
 }
 
 fn task_name(name: &str) -> String {
     format!("fbsy-{name}")
-}
-
-/// `<base>/config/config.json` → `<base>/logs/<name>.log`, so the unit's log
-/// path matches `fbsy logs <name>` regardless of which account runs the service.
-fn log_path_for(config: &Path, name: &str) -> PathBuf {
-    config
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|base| base.join("logs").join(format!("{name}.log")))
-        .unwrap_or_else(|| paths::service_log_path(name))
 }
 
 fn absolute(path: &Path) -> PathBuf {
@@ -237,130 +197,54 @@ fn absolute(path: &Path) -> PathBuf {
 }
 
 fn ensure_bridge_config_ready(path: &Path) -> Result<()> {
-    let store = JsonConfigStore;
-    match store.load(path) {
-        Ok(_) => {
-            println!(
-                "{} Config is valid: {}",
-                style("✔").green().bold(),
-                style(path.display()).yellow()
-            );
-            Ok(())
-        }
-        Err(ConfigError::NotFound(_)) => {
-            println!(
-                "{} No config found at {}",
-                style("!").yellow().bold(),
-                style(path.display()).cyan()
-            );
-            let run_setup = Confirm::new()
-                .with_prompt("Run the setup wizard now?")
-                .default(true)
-                .interact()
-                .unwrap_or(false);
-            if !run_setup {
-                println!(
-                    "Run {} when ready, then enable boot auto-start again.",
-                    style("fbsy bridge config setup").cyan()
-                );
-                bail!("bridge config is required before enabling boot auto-start");
-            }
-
-            application::setup::run_at(path.to_path_buf())?;
-            store
-                .load(path)
-                .map(|_| ())
-                .context("validate config after setup")
-        }
-        Err(err) => {
-            eprintln!(
-                "{} Config is not valid: {}",
-                style("!").yellow().bold(),
-                err
-            );
-            eprintln!(
-                "Run {} after fixing it.",
-                style("fbsy bridge config validate").cyan()
-            );
-            bail!("bridge config must be valid before enabling boot auto-start");
-        }
-    }
+    JsonConfigStore.load(path).map(|_| ()).with_context(|| {
+        format!(
+            "bridge config at {} must exist and be valid before enabling boot auto-start \
+             (run `fbsy setup`)",
+            path.display()
+        )
+    })
 }
 
-// ── Platform: elevation, install, remove, status ──────────────────────────────
-
-#[cfg(unix)]
-fn is_elevated() -> bool {
-    // Safety: geteuid is always safe and has no preconditions.
-    unsafe { libc::geteuid() == 0 }
-}
-
-#[cfg(windows)]
-fn is_elevated() -> bool {
-    // Best-effort: `net session` only succeeds for elevated processes. If this
-    // is wrong, the schtasks call below fails with a clear access-denied error.
-    std::process::Command::new("net")
-        .args(["session"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(unix)]
-fn invoking_user() -> Option<String> {
-    // Under sudo this is the real user, so the service runs as them (and its
-    // config/log dirs resolve to their home, not root's).
-    std::env::var("SUDO_USER").ok().filter(|u| u != "root")
-}
-
-#[cfg(windows)]
-fn invoking_user() -> Option<String> {
-    None // the schtasks task runs as SYSTEM
-}
-
-#[cfg(unix)]
-fn resolve_config_when_elevated(config: Option<PathBuf>) -> Result<PathBuf> {
-    let cfg = config.context(
-        "pass --config <abs path> when running with sudo \
-         (tip: run `fbsy enable` WITHOUT sudo to print the exact command)",
-    )?;
-    Ok(absolute(&cfg))
-}
-
-#[cfg(windows)]
-fn resolve_config_when_elevated(config: Option<PathBuf>) -> Result<PathBuf> {
-    // No HOME reset on Windows: an elevated shell is still the same user, so the
-    // default path resolves correctly.
-    Ok(absolute(&config.unwrap_or_else(paths::default_config_path)))
-}
+// ── Platform: install, remove, status ─────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
     let path = unit_path(&ctx.name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
     std::fs::write(&path, systemd_unit(ctx))
         .with_context(|| format!("write unit {}", path.display()))?;
-    run_cmd("systemctl", &["daemon-reload"])?;
-    run_cmd("systemctl", &["enable", "--now", &service_unit(&ctx.name)])?;
+    run_cmd("systemctl", &["--user", "daemon-reload"])?;
+    run_cmd(
+        "systemctl",
+        &["--user", "enable", "--now", &service_unit(&ctx.name)],
+    )?;
+    // Best-effort: let the user service run even before login after boot.
+    let _ = std::process::Command::new("loginctl")
+        .args(["enable-linger"])
+        .status();
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn remove_unit(name: &str) -> Result<()> {
     let unit = service_unit(name);
-    let _ = run_cmd("systemctl", &["disable", "--now", &unit]);
+    let _ = run_cmd("systemctl", &["--user", "disable", "--now", &unit]);
     let path = unit_path(name);
     if path.exists() {
         std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
     }
-    let _ = run_cmd("systemctl", &["daemon-reload"]);
+    let _ = run_cmd("systemctl", &["--user", "daemon-reload"]);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn unit_path(name: &str) -> PathBuf {
-    PathBuf::from(format!("/etc/systemd/system/fbsy-{name}.service"))
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    PathBuf::from(home).join(format!(".config/systemd/user/fbsy-{name}.service"))
 }
 
 #[cfg(target_os = "linux")]
@@ -371,6 +255,10 @@ fn service_unit(name: &str) -> String {
 #[cfg(target_os = "macos")]
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
     let path = unit_path(&ctx.name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
     std::fs::write(&path, launchd_plist(ctx))
         .with_context(|| format!("write plist {}", path.display()))?;
     let _ = run_cmd("launchctl", &["unload", &path.to_string_lossy()]);
@@ -390,18 +278,23 @@ fn remove_unit(name: &str) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn unit_path(name: &str) -> PathBuf {
-    PathBuf::from(format!("/Library/LaunchDaemons/com.fbsy.{name}.plist"))
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    PathBuf::from(home).join(format!("Library/LaunchAgents/com.fbsy.{name}.plist"))
 }
 
 #[cfg(windows)]
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
     let args = schtasks_create_args(ctx);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_cmd("schtasks", &arg_refs)
+    run_cmd("schtasks", &arg_refs)?;
+    // Start it now too; the task itself only fires at the next logon.
+    let _ = run_cmd("schtasks", &["/run", "/tn", &task_name(&ctx.name)]);
+    Ok(())
 }
 
 #[cfg(windows)]
 fn remove_unit(name: &str) -> Result<()> {
+    let _ = run_cmd("schtasks", &["/end", "/tn", &task_name(name)]);
     run_cmd("schtasks", &["/delete", "/tn", &task_name(name), "/f"])
 }
 
@@ -440,51 +333,14 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn print_elevation_hint(exe: &Path, name: &str, cfg: &Path) {
-    println!(
-        "{} Installing a boot service needs administrator privileges. Run:",
-        style("!").yellow().bold()
-    );
-    #[cfg(windows)]
-    println!(
-        "    (from an Administrator PowerShell)  \"{}\" enable {name} --config \"{}\"",
-        exe.display(),
-        cfg.display()
-    );
-    #[cfg(not(windows))]
-    println!(
-        "    sudo \"{}\" enable {name} --config \"{}\"",
-        exe.display(),
-        cfg.display()
-    );
-}
-
-fn sudo_word() -> &'static str {
-    #[cfg(windows)]
-    {
-        "(Administrator)"
-    }
-    #[cfg(not(windows))]
-    {
-        "sudo"
-    }
-}
-
-fn elevated_prefix() -> String {
-    let exe = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "fbsy".to_string());
-    format!("{} {exe}", sudo_word())
-}
-
 fn inspect_hint(name: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        format!("systemctl status fbsy-{name}   ·   journalctl -u fbsy-{name}")
+        format!("systemctl --user status fbsy-{name}")
     }
     #[cfg(target_os = "macos")]
     {
-        format!("sudo launchctl list | grep com.fbsy.{name}")
+        format!("launchctl list | grep com.fbsy.{name}")
     }
     #[cfg(target_os = "windows")]
     {
@@ -503,58 +359,42 @@ mod tests {
             exe: PathBuf::from("/home/u/.local/bin/fbsy"),
             config: PathBuf::from("/home/u/.config/fbsy/config/config.json"),
             log: PathBuf::from("/home/u/.config/fbsy/logs/bridge.log"),
-            user: Some("u".to_string()),
         }
     }
 
     #[test]
-    fn systemd_unit_has_supervised_execstart_and_restart() {
+    fn systemd_unit_is_a_user_unit_with_restart() {
         let unit = systemd_unit(&ctx());
         assert!(unit.contains(
             "ExecStart=/home/u/.local/bin/fbsy __service-supervised bridge \
              --config /home/u/.config/fbsy/config/config.json"
         ));
         assert!(unit.contains("Restart=always"));
-        assert!(unit.contains("User=u"));
-        assert!(unit.contains("StandardOutput=append:/home/u/.config/fbsy/logs/bridge.log"));
-        assert!(unit.contains("WantedBy=multi-user.target"));
-    }
-
-    #[test]
-    fn systemd_unit_omits_user_line_when_unknown() {
-        let mut c = ctx();
-        c.user = None;
-        assert!(!systemd_unit(&c).contains("User="));
+        assert!(unit.contains("WantedBy=default.target"));
+        assert!(!unit.contains("User="));
     }
 
     #[test]
     fn launchd_plist_has_runatload_and_program_args() {
         let plist = launchd_plist(&ctx());
         assert!(plist.contains("<key>RunAtLoad</key>"));
+        assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<string>__service-supervised</string>"));
         assert!(plist.contains("<string>/home/u/.config/fbsy/config/config.json</string>"));
         assert!(plist.contains("com.fbsy.bridge"));
+        assert!(!plist.contains("UserName"));
     }
 
     #[test]
-    fn schtasks_args_use_onstart_system_and_absolute_paths() {
+    fn schtasks_args_use_onlogon_current_user() {
         let args = schtasks_create_args(&ctx());
-        assert!(args.contains(&"onstart".to_string()));
-        assert!(args.contains(&"SYSTEM".to_string()));
+        assert!(args.contains(&"onlogon".to_string()));
+        assert!(!args.contains(&"SYSTEM".to_string()));
         assert!(args.contains(&"fbsy-bridge".to_string()));
         let tr = args
             .iter()
             .find(|a| a.contains("__service-supervised"))
             .unwrap();
         assert!(tr.contains("--config"));
-    }
-
-    #[test]
-    fn log_path_is_derived_from_config_base() {
-        let log = log_path_for(
-            &PathBuf::from("/home/u/.config/fbsy/config/config.json"),
-            "bridge",
-        );
-        assert_eq!(log, PathBuf::from("/home/u/.config/fbsy/logs/bridge.log"));
     }
 }

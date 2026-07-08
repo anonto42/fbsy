@@ -12,7 +12,6 @@ use std::{net::TcpListener, path::PathBuf, time::Duration};
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
 use console::style;
-use dialoguer::Confirm;
 
 use crate::{
     adapters::config_file::JsonConfigStore,
@@ -25,116 +24,6 @@ use crate::{
     services::ServiceKind,
     support::{log_rotation, network, paths},
 };
-
-// ── Parent side: `fbsy run <service>` ─────────────────────────────────────────
-
-/// Start the mock ZKTeco device server, detached.
-pub fn run_zkteco(name: Option<String>, port: u16, records: usize) -> Result<()> {
-    let name = name.unwrap_or_else(|| ServiceKind::Zkteco.name().to_string());
-    let args = vec![
-        "--port".to_string(),
-        port.to_string(),
-        "--records".to_string(),
-        records.to_string(),
-    ];
-    start_detached(ServiceKind::Zkteco, &name, Some(port), &args)
-}
-
-/// Start the mock HRMS webhook server, detached.
-pub fn run_hrms(name: Option<String>, port: u16) -> Result<()> {
-    let name = name.unwrap_or_else(|| ServiceKind::Hrms.name().to_string());
-    let args = vec!["--port".to_string(), port.to_string()];
-    start_detached(ServiceKind::Hrms, &name, Some(port), &args)
-}
-
-/// Start the network scanner service, detached.
-pub fn run_scanner(
-    name: Option<String>,
-    interval: u64,
-    opts: application::scanner::ScanOptions,
-) -> Result<()> {
-    let name = name.unwrap_or_else(|| ServiceKind::Scanner.name().to_string());
-    let args = scanner_args(interval, &opts);
-    start_detached(ServiceKind::Scanner, &name, None, &args)
-}
-
-/// Start the real attendance bridge, detached, with an interactive first run.
-pub fn run_at_bridge(
-    name: Option<String>,
-    config: Option<PathBuf>,
-    interval: Option<u64>,
-    no_poll: bool,
-) -> Result<()> {
-    let name = name.unwrap_or_else(|| ServiceKind::AtBridge.name().to_string());
-    paths::ensure_dirs()?;
-    let _ = paths::migrate_legacy_config();
-    let cfg_path = config.clone().unwrap_or_else(paths::default_config_path);
-
-    // First run: no config yet — offer the setup wizard.
-    if !cfg_path.exists() {
-        println!(
-            "{} No config found at {}",
-            style("!").yellow().bold(),
-            style(cfg_path.display()).cyan()
-        );
-        let run_setup = Confirm::new()
-            .with_prompt("Run the setup wizard now?")
-            .default(true)
-            .interact()
-            .unwrap_or(false);
-        if run_setup {
-            application::setup::run_at(cfg_path.clone())?;
-        } else {
-            println!(
-                "Run {} when ready, then start the bridge again.",
-                style("fbsy bridge config setup").cyan()
-            );
-            return Ok(());
-        }
-    }
-
-    // Already running? Show status instead of double-starting.
-    if let Some(entry) = registry::read(&name)? {
-        if process::is_alive(entry.pid, Some(&entry.exe)) {
-            println!(
-                "{} {name} already running (pid {}).",
-                style("✔").green().bold(),
-                entry.pid
-            );
-            return status(&name);
-        }
-    }
-
-    // Configured and stopped — start it. Record the bridge port from config.
-    let cfg = JsonConfigStore.load(&cfg_path)?;
-    let port = Some(cfg.bridge_port);
-    let mut args = Vec::new();
-    if let Some(c) = config {
-        args.push("--config".to_string());
-        args.push(c.display().to_string());
-    }
-    if let Some(i) = interval {
-        args.push("--interval".to_string());
-        args.push(i.to_string());
-    }
-    if no_poll {
-        args.push("--no-poll".to_string());
-    }
-    start_detached(ServiceKind::AtBridge, &name, port, &args)?;
-    if cfg.auto_start_on_boot && !application::autostart::status(&name).installed {
-        println!(
-            "{} This config requests OS boot auto-start; attempting to enable it now.",
-            style("→").cyan().bold()
-        );
-        if let Err(err) = application::autostart::enable(&name, Some(cfg_path.clone())) {
-            println!(
-                "{} Boot auto-start is not enabled yet: {err}",
-                style("!").yellow().bold()
-            );
-        }
-    }
-    Ok(())
-}
 
 /// Print-free spawn: refuse double-start, clear stale entry, spawn detached,
 /// verify the child stayed alive, record the registry entry, and return the pid.
@@ -262,9 +151,16 @@ pub fn start_named(
             let cfg_path = config.clone().unwrap_or_else(paths::default_config_path);
             if !cfg_path.exists() {
                 bail!(
-                    "bridge needs setup — run `fbsy bridge config setup` \
+                    "bridge needs setup — run `fbsy setup` \
                      (or pass --config <path> to use an existing config)"
                 );
+            }
+            // When the config asks for boot auto-start, run under the OS
+            // supervisor (launchd/systemd/schtasks) instead of a detached
+            // process, so the same instance survives reboots and crashes.
+            if load_autostart_flag(&cfg_path) {
+                application::autostart::install_quiet(&name, Some(cfg_path.clone()))?;
+                return wait_for_registered_pid(&name);
             }
             let port = port.or_else(|| load_bridge_port(&cfg_path));
             let mut args = Vec::new();
@@ -281,20 +177,6 @@ pub fn start_named(
             &scanner_args(300, &application::scanner::ScanOptions::default()),
         ),
     }
-}
-
-/// CLI wrapper around [`spawn_service`] that prints the result.
-fn start_detached(kind: ServiceKind, name: &str, port: Option<u16>, args: &[String]) -> Result<()> {
-    let pid = spawn_service(kind, name, port, args)?;
-    let log = paths::service_log_path(name);
-    println!(
-        "{} {} started (pid {}). Logs: {}",
-        style("✔").green().bold(),
-        style(name).cyan().bold(),
-        pid,
-        log.display()
-    );
-    Ok(())
 }
 
 // ── Child side: hidden `__service-run <service> [args]` ───────────────────────
@@ -410,15 +292,21 @@ pub fn snapshot() -> Vec<ServiceStatus> {
 
 /// Print-free stop of a named instance. Returns whether a process was signalled.
 pub fn stop_instance(name: &str) -> Result<bool> {
+    // A supervised instance (KeepAlive) would be respawned instantly by the
+    // OS — unload its boot unit first so "stop" actually stops it.
+    let had_unit = application::autostart::status(name).installed;
+    if had_unit {
+        application::autostart::remove_quiet(name)?;
+    }
     let Some(entry) = registry::read(name)? else {
-        return Ok(false);
+        return Ok(had_unit);
     };
     let was_alive = process::is_alive(entry.pid, Some(&entry.exe));
     if was_alive {
         process::terminate(entry.pid)?;
     }
     registry::clear(name)?;
-    Ok(was_alive)
+    Ok(was_alive || had_unit)
 }
 
 /// Stop the default-named instance of a kind (used by the dashboard's start/stop).
@@ -436,6 +324,11 @@ pub fn restart_instance(name: &str) -> Result<u32> {
         .ok_or_else(|| anyhow::anyhow!("instance '{name}' has unknown kind"))?;
     stop_instance(name)?;
     std::thread::sleep(Duration::from_millis(150));
+    if kind == ServiceKind::AtBridge {
+        // Re-derive the start mode from config so a supervised (boot
+        // auto-start) bridge comes back supervised, not detached.
+        return start_named(kind, Some(name.to_string()), entry.port, None);
+    }
     spawn_service(kind, name, entry.port, &entry.args)
 }
 
@@ -446,8 +339,8 @@ pub fn show() -> Result<()> {
     let rows = snapshot();
     if rows.is_empty() {
         println!(
-            "No services running. Start one with {}.",
-            style("fbsy run <service>").cyan()
+            "The bridge is not running. Start it with {}.",
+            style("fbsy start").cyan()
         );
         return Ok(());
     }
@@ -655,6 +548,31 @@ fn load_bridge_port(cfg_path: &std::path::Path) -> Option<u16> {
         .load(cfg_path)
         .ok()
         .map(|cfg| cfg.bridge_port)
+}
+
+fn load_autostart_flag(cfg_path: &std::path::Path) -> bool {
+    JsonConfigStore
+        .load(cfg_path)
+        .map(|cfg| cfg.auto_start_on_boot)
+        .unwrap_or(false)
+}
+
+/// Wait for the OS-supervised bridge to boot and self-register, returning its
+/// pid. The supervisor (launchd/systemd/schtasks) starts the process
+/// asynchronously, so poll the registry briefly.
+fn wait_for_registered_pid(name: &str) -> Result<u32> {
+    for _ in 0..50 {
+        if let Ok(Some(entry)) = registry::read(name) {
+            if process::is_alive(entry.pid, Some(&entry.exe)) {
+                return Ok(entry.pid);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    bail!(
+        "boot service installed but the bridge did not report in within 5s; \
+         check `fbsy logs`"
+    )
 }
 
 fn preflight_bridge_port(port: Option<u16>) -> Result<()> {

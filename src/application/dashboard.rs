@@ -61,8 +61,6 @@ enum AttachedTask {
     Cli(Vec<String>),
     /// Interactive setup wizard (configure HRMS + devices).
     Setup,
-    /// One-shot LAN scan for biometric devices.
-    Scan,
 }
 
 struct App {
@@ -204,11 +202,16 @@ fn handle_home_key(app: &mut App, code: KeyCode) {
 }
 
 /// Output page: scroll the live execution logs; Esc/Tab go back home.
+/// The prompt card is visible here too, so typing works exactly like home.
 fn handle_output_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => app.goto(Page::Home),
         KeyCode::Char('q') => app.quit = true,
         KeyCode::Char('?') => app.goto(Page::Help),
+        KeyCode::Char(':') => {
+            app.mode = Mode::Command;
+            app.input.clear();
+        }
         // Bridge shortcuts still work here; output refreshes in place.
         KeyCode::Char('s') => run_action(app, Action::Start(ServiceKind::AtBridge)),
         KeyCode::Char('x') => run_action(app, Action::Stop("bridge".to_string())),
@@ -223,6 +226,12 @@ fn handle_output_key(app: &mut App, code: KeyCode) {
         KeyCode::PageDown => app.log_scroll = app.log_scroll.saturating_sub(10),
         KeyCode::Home => app.log_scroll = usize::MAX, // oldest
         KeyCode::End => app.log_scroll = 0,           // newest
+        // Any other letter starts typing a command, same as the home page.
+        KeyCode::Char(c) => {
+            app.mode = Mode::Command;
+            app.input.clear();
+            app.input.push(c);
+        }
         _ => {}
     }
 }
@@ -365,12 +374,7 @@ fn execute_command(app: &mut App, line: &str) {
             app.status = "leaving dashboard for the setup wizard".to_string();
             return;
         }
-        "scan" => {
-            app.pending_attach = Some(AttachedTask::Scan);
-            app.status = "leaving dashboard to scan the local network".to_string();
-            return;
-        }
-        "install" | "uninstall" | "update" => {
+        "install" | "uninstall" | "update" | "status" => {
             // Valid pass-through commands
         }
         other => {
@@ -490,13 +494,6 @@ fn run_attached(
                 Err(err) => format!("setup failed: {err}"),
             };
         }
-        AttachedTask::Scan => {
-            let opts = crate::application::scanner::ScanOptions::default();
-            *status_text = match crate::application::scanner::run_scan(opts) {
-                Ok(()) => "scan finished".to_string(),
-                Err(err) => format!("scan failed: {err}"),
-            };
-        }
     }
 
     println!();
@@ -608,7 +605,10 @@ fn draw_home_page(
     bridge: &ServiceStatus,
     sync_line: &str,
 ) {
-    let content_height = 6 + 1 + 5 + 1; // Logo(6) + Spacing(1) + Input(5) + Guides(1)
+    // Logo(6) + Spacing(1) + Input(5) + Guides(1) + Spacing(1) + Palette(7)
+    // On short terminals drop the palette rather than clipping it mid-line.
+    let palette_height = if active_area.height >= 23 { 7u16 } else { 0 };
+    let content_height = 6 + 1 + 5 + 1 + 1 + palette_height;
     let top_padding = active_area
         .height
         .saturating_sub(content_height + 1) // +1 for footer line
@@ -616,11 +616,13 @@ fn draw_home_page(
 
     let splits = Layout::vertical([
         Constraint::Length(top_padding),
-        Constraint::Length(6), // logo
-        Constraint::Length(1), // spacing
-        Constraint::Length(5), // prompt input box
-        Constraint::Length(1), // guides
-        Constraint::Min(1),    // bottom padding
+        Constraint::Length(6),              // logo
+        Constraint::Length(1),              // spacing
+        Constraint::Length(5),              // prompt input box
+        Constraint::Length(1),              // guides
+        Constraint::Length(1),              // spacing
+        Constraint::Length(palette_height), // command palette
+        Constraint::Min(1),                 // bottom padding
     ])
     .split(active_area);
 
@@ -634,7 +636,45 @@ fn draw_home_page(
     draw_logo(frame, splits[1]);
     draw_status(frame, splits[3], app, bridge, sync_line);
     draw_guides(frame, splits[4], app);
+    if palette_height > 0 {
+        draw_palette(frame, splits[6]);
+    }
     draw_footer(frame, footer_area);
+}
+
+/// Home page command palette: what you can type into the input field, and
+/// which pages exist. Two dim columns so it reads as a hint, not content.
+fn draw_palette(frame: &mut Frame, area: Rect) {
+    let green = Color::Rgb(16, 163, 127);
+    let dim = Color::Rgb(120, 120, 120);
+    let head = Color::Rgb(160, 160, 160);
+
+    let pair = |left_cmd: &str, left_desc: &str, right_cmd: &str, right_desc: &str| {
+        Line::from(vec![
+            Span::styled(format!("  {left_cmd:<10}"), Style::default().fg(green)),
+            Span::styled(format!("{left_desc:<32}"), Style::default().fg(dim)),
+            Span::styled(format!("{right_cmd:<10}"), Style::default().fg(green)),
+            Span::styled(right_desc.to_string(), Style::default().fg(dim)),
+        ])
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  commands", Style::default().fg(head).bold()),
+            Span::styled(
+                "  (type in the input field or press the key)",
+                Style::default().fg(dim),
+            ),
+        ]),
+        Line::default(),
+        pair("start  s", "start the bridge service", "setup", "configure HRMS & devices"),
+        pair("stop   x", "stop the bridge service", "status", "show bridge + boot status"),
+        pair("restart r", "restart the bridge service", "update", "install the newest release"),
+        pair("sync   y", "sync attendance once now", "help  ?", "open the help page"),
+        pair("logs   tab", "open the output page", "quit   q", "exit the dashboard"),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// Output page: status header, full-height execution logs, guides, footer.
@@ -708,7 +748,6 @@ fn draw_help(frame: &mut Frame, full: Rect, app: &App) {
         row("restart / r", "restart the bridge service"),
         row("sync / y", "run a one-off sync now"),
         row("setup", "configure HRMS connection and devices (wizard)"),
-        row("scan", "discover biometric devices on the local network"),
         row("logs / l", "open the output page"),
         row("home / h", "go back to the home page"),
         row("help / ?", "open this help page"),
@@ -797,10 +836,14 @@ fn draw_logo(frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
+/// One row under the prompt card: latest command feedback on the left
+/// (start/stop/sync results, command errors), key hints on the right.
 fn draw_guides(frame: &mut Frame, area: Rect, app: &App) {
     let dim = Color::Rgb(100, 100, 100);
     let cyan = Color::Rgb(16, 163, 127);
-    let spans = if app.page == Page::Output {
+    let yellow = Color::Rgb(245, 158, 11);
+
+    let right = if app.page == Page::Output {
         vec![
             Span::styled("Esc ", Style::default().fg(cyan).bold()),
             Span::styled("home  ", Style::default().fg(dim)),
@@ -821,8 +864,25 @@ fn draw_guides(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("quit", Style::default().fg(dim)),
         ]
     };
-    let line = Line::from(spans).alignment(ratatui::layout::Alignment::Right);
-    frame.render_widget(Paragraph::new(line), area);
+
+    let right_len: usize = right.iter().map(|s| s.width()).sum();
+    let status_style = if app.status.starts_with("error") || app.status.contains("failed") {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(yellow)
+    };
+    // Truncate the status so it never collides with the right-hand hints.
+    let status_max = (area.width as usize).saturating_sub(right_len + 3);
+    let status: String = app.status.chars().take(status_max).collect();
+
+    let mut line = vec![Span::styled(format!(" {status}"), status_style)];
+    let left_len: usize = line.iter().map(|s| s.width()).sum();
+    let space = (area.width as usize).saturating_sub(left_len + right_len);
+    if space > 0 {
+        line.push(Span::raw(" ".repeat(space)));
+    }
+    line.extend(right);
+    frame.render_widget(Paragraph::new(Line::from(line)), area);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
@@ -948,11 +1008,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, bridge: &ServiceStatus,
 
     let sync_status = if is_active { "active" } else { "idle" };
 
-    let placeholder = if area.width < 75 {
-        "Ask anything... \"s: start · tab: logs · q: quit\""
-    } else {
-        "Ask anything... \"s to start bridge · tab to view logs · q to quit\""
-    };
+    let placeholder = "Type a command...";
 
     let prompt_line = match app.mode {
         Mode::Command => {
@@ -960,7 +1016,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, bridge: &ServiceStatus,
                 Line::from(vec![
                     Span::styled(" ┃ ", Style::default().fg(blue).bold()),
                     Span::styled(" › ", Style::default().fg(blue).bold()),
-                    Span::styled("Ask anything...", Style::default().fg(dim)),
+                    Span::styled(placeholder, Style::default().fg(dim)),
                     Span::styled("█", Style::default().fg(blue)),
                 ])
             } else {
