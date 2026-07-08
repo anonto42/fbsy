@@ -1,7 +1,5 @@
 //! CLI dispatch: route a parsed command into the application layer.
 
-use std::io::IsTerminal;
-
 use anyhow::Result;
 use clap::CommandFactory;
 
