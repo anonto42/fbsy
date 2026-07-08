@@ -1,0 +1,22 @@
+{
+  "bridgeMode": "pull",
+  "vpsWebhookUrl": "https://api.selevohq.com/api/v1/biometric-devices/webhook",
+  "bridgePort": 7431,
+  "autoStartOnBoot": true,
+  "hrmsBaseUrl": "https://api.selevohq.com/api/v1",
+  "jobPollIntervalSeconds": 30,
+  "devices": [
+    {
+      "deviceIp": "192.168.4.139",
+      "devicePort": 4370,
+      "deviceTimeout": 15,
+      "deviceForceUdp": false,
+      "deviceOmitPing": true,
+      "deviceCode": "gate1",
+      "apiKey": "gate1",
+      "organizationId": 4,
+      "syncIntervalSeconds": 300,
+      "clearAttendanceAfterSync": false
+    }
+  ]
+}
