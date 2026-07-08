@@ -1,6 +1,6 @@
 [package]
 name = "fingerbridge"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "Native biometric attendance bridge for HRMS webhook ingestion"
 license = "Proprietary"

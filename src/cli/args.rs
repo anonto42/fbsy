@@ -27,7 +27,7 @@ mod tests {
     fn uninstall_accepts_common_typo_aliases() {
         for word in ["uninstall", "unistall", "unistaill"] {
             let cli = Cli::parse_from(["fbsy", word]);
-            assert!(matches!(cli.command, Some(Command::Uninstall)));
+            assert!(matches!(cli.command, Some(Command::Uninstall(_))));
         }
     }
 }

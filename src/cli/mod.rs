@@ -10,7 +10,7 @@ mod dispatch;
 use anyhow::Result;
 
 pub use args::Cli;
-pub use command::Command;
+pub use command::{Command, UninstallArgs};
 
 /// Run the parsed CLI command.
 pub fn run(cli: Cli) -> Result<()> {

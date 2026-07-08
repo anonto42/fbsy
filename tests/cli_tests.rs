@@ -46,63 +46,6 @@ fn unknown_subcommand_exits_nonzero() {
     );
 }
 
-// ── bridge subcommands ────────────────────────────────────────────────────────
-
-#[test]
-fn bridge_help_exits_zero() {
-    let out = fbsy()
-        .args(["bridge", "--help"])
-        .output()
-        .expect("run fbsy bridge --help");
-    assert!(out.status.success());
-}
-
-#[test]
-fn bridge_doctor_help_exits_zero() {
-    let out = fbsy()
-        .args(["bridge", "doctor", "--help"])
-        .output()
-        .expect("run fbsy bridge doctor --help");
-    assert!(out.status.success());
-}
-
-#[test]
-fn bridge_config_setup_help_mentions_local_preset() {
-    let out = fbsy()
-        .args(["bridge", "config", "setup", "--help"])
-        .output()
-        .expect("run fbsy bridge config setup --help");
-    assert!(out.status.success());
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("--local"));
-    assert!(stdout.contains("--force"));
-}
-
-#[test]
-fn bridge_config_validate_missing_file_exits_nonzero() {
-    let out = fbsy()
-        .args([
-            "bridge",
-            "config",
-            "validate",
-            "--config",
-            "/tmp/fbsy-nonexistent-config-xyz.json",
-        ])
-        .output()
-        .expect("run config validate with missing file");
-    assert!(
-        !out.status.success(),
-        "validate against a missing file should fail"
-    );
-}
-
-#[test]
-fn show_exits_zero() {
-    let out = fbsy().arg("show").output().expect("run fbsy show");
-    // show lists running services; zero services is still a success exit.
-    assert!(out.status.success(), "fbsy show should exit 0");
-}
-
 // ── update subcommand ─────────────────────────────────────────────────────────
 
 #[test]

@@ -15,9 +15,9 @@ use anyhow::{Context, Result};
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -31,6 +31,7 @@ const TICK: Duration = Duration::from_millis(250);
 const LOG_TAIL: usize = 400;
 
 /// Normal navigation vs typing a `:command`.
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum Mode {
     Normal,
     Command,
@@ -74,7 +75,7 @@ impl App {
     fn new() -> Self {
         Self {
             selected: 0,
-            show_logs: true,
+            show_logs: false,
             all_logs: false,
             log_scroll: 0,
             focus: Focus::Table,
@@ -250,6 +251,12 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
             run_action(app, Action::Sync(None));
             return;
         }
+        KeyCode::Char(c) => {
+            app.mode = Mode::Command;
+            app.input.clear();
+            app.input.push(c);
+            return;
+        }
         _ => {}
     }
 
@@ -258,7 +265,7 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
         Focus::Logs => match code {
             KeyCode::Esc => {
                 app.focus = Focus::Table;
-                app.status = focus_hint(Focus::Table);
+                app.status = "focus returned to input".to_string();
             }
             KeyCode::Up | KeyCode::Char('k') => app.log_scroll = app.log_scroll.saturating_add(1),
             KeyCode::Down | KeyCode::Char('j') => app.log_scroll = app.log_scroll.saturating_sub(1),
@@ -269,7 +276,14 @@ fn handle_normal_key(app: &mut App, code: KeyCode, rows: &[ServiceStatus]) {
             _ => {}
         },
         Focus::Table => match code {
-            KeyCode::Esc => app.quit = true,
+            KeyCode::Esc => {
+                if app.show_logs {
+                    app.show_logs = false;
+                    app.status = "logs closed".to_string();
+                } else {
+                    app.quit = true;
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 app.selected = app.selected.saturating_sub(1);
                 app.log_scroll = 0;
@@ -331,6 +345,9 @@ enum Action {
 }
 
 fn run_action(app: &mut App, action: Action) {
+    app.show_logs = true;
+    app.focus = Focus::Logs;
+    app.log_scroll = 0;
     app.status = match action {
         Action::Start(kind) => match service::default_start(kind) {
             Ok(pid) => format!("started {} (pid {pid})", kind.name()),
@@ -376,11 +393,10 @@ fn execute_command(app: &mut App, line: &str) {
         args.remove(0);
     }
     if args.is_empty() {
-        app.status = "type a command, for example: show".to_string();
+        app.status = "type a command, for example: start".to_string();
         return;
     }
 
-    let rows = dashboard_rows(service::snapshot());
     match args[0].as_str() {
         "help" | "?" => {
             app.show_help = true;
@@ -390,101 +406,50 @@ fn execute_command(app: &mut App, line: &str) {
             app.quit = true;
             return;
         }
-        "select" => {
-            match args
-                .get(1)
-                .and_then(|name| row_index_by_name_or_kind(&rows, name))
-            {
-                Some(index) => {
-                    app.selected = index;
-                    app.log_scroll = 0;
-                    app.status = format!("selected {}", rows[index].name);
-                }
-                None => app.status = "usage: select <instance>|<kind>".to_string(),
-            }
+        "start" | "s" => {
+            run_action(app, Action::Start(ServiceKind::AtBridge));
             return;
         }
-        "logs" if args.get(1).is_some_and(|arg| arg == "all") => {
-            app.all_logs = true;
-            app.show_logs = true;
+        "stop" | "x" => {
+            run_action(app, Action::Stop("bridge".to_string()));
+            return;
+        }
+        "restart" | "r" => {
+            run_action(
+                app,
+                Action::Restart("bridge".to_string(), ServiceKind::AtBridge),
+            );
+            return;
+        }
+        "sync" | "y" => {
+            run_action(app, Action::Sync(None));
+            return;
+        }
+        "l" | "logs" => {
+            app.show_logs = !app.show_logs;
             app.log_scroll = 0;
-            app.status = "showing logs: all running instances".to_string();
+            app.status = if app.show_logs {
+                "logs pane opened".to_string()
+            } else {
+                "logs pane closed".to_string()
+            };
             return;
         }
-        "restart" => {
-            match args
-                .get(1)
-                .and_then(|name| row_by_name_or_kind(&rows, name))
-            {
-                Some(row) => run_action(app, Action::Restart(row.name.clone(), row.kind)),
-                None => app.status = "usage: restart <instance>".to_string(),
-            }
+        "install" | "uninstall" | "update" => {
+            // Valid pass-through commands
+        }
+        other => {
+            app.status = format!("error: unrecognized command '{other}'");
             return;
         }
-        "dashboard" => {
-            app.status = "already inside fbsy dashboard".to_string();
-            return;
-        }
-        _ => {}
     }
 
-    let args = expand_dashboard_alias(args);
     if should_run_attached(&args) {
         app.pending_attach = Some(args);
         app.status = "leaving dashboard temporarily for an interactive command".to_string();
     } else {
         app.output = Some(run_captured(&args));
         app.status = "command output opened; Esc closes it".to_string();
-    }
-}
-
-fn expand_dashboard_alias(mut args: Vec<String>) -> Vec<String> {
-    match args[0].as_str() {
-        "start" => {
-            args[0] = "run".to_string();
-            args
-        }
-        "stop" => {
-            args[0] = "close".to_string();
-            args
-        }
-        "sync" => {
-            let mut out = vec![
-                "bridge".to_string(),
-                "sync".to_string(),
-                "--once".to_string(),
-            ];
-            match args.get(1) {
-                Some(device) if !device.starts_with('-') => {
-                    out.push("--device".to_string());
-                    out.push(device.clone());
-                    out.extend(args.into_iter().skip(2));
-                }
-                Some(_) => out.extend(args.into_iter().skip(1)),
-                None => {}
-            }
-            out
-        }
-        "doctor" | "config" | "devices" | "webhook" => {
-            let mut out = vec!["bridge".to_string()];
-            out.extend(args);
-            out
-        }
-        "setup" => vec![
-            "bridge".to_string(),
-            "config".to_string(),
-            "setup".to_string(),
-        ],
-        "once" => {
-            let mut out = vec![
-                "bridge".to_string(),
-                "sync".to_string(),
-                "--once".to_string(),
-            ];
-            out.extend(args.into_iter().skip(1));
-            out
-        }
-        _ => args,
     }
 }
 
@@ -497,10 +462,6 @@ fn should_run_attached(args: &[String]) -> bool {
                 || has_flag("-y", "--yes")
                 || rest.iter().any(|arg| arg == "--auto"))
         }
-        [cmd, service, ..] if cmd == "run" && service == "bridge" => true,
-        [cmd, sub, ..] if cmd == "bridge" && sub == "run" => true,
-        [cmd, sub, leaf, ..] if cmd == "bridge" && sub == "config" && leaf == "setup" => true,
-        [cmd, ..] if cmd == "logs" && has_flag("-f", "--follow") => true,
         _ => false,
     }
 }
@@ -649,9 +610,9 @@ fn display_args(args: &[String]) -> String {
 
 fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
     let area = frame.area();
-    if area.width < 80 || area.height < 20 {
+    if area.width < 60 || area.height < 12 {
         let msg = format!(
-            "Terminal too small ({}x{}). Minimum is 80x20. Please resize.",
+            "Terminal too small ({}x{}). Minimum is 60x12. Please resize.",
             area.width, area.height
         );
         let para = Paragraph::new(msg)
@@ -670,24 +631,70 @@ fn draw(frame: &mut Frame, app: &App, rows: &[ServiceStatus]) {
         Constraint::Length(0)
     };
 
-    let table_height = (rows.len() as u16 + 3).max(5);
-
-    let areas = Layout::vertical([
-        Constraint::Length(3),            // title
-        Constraint::Length(table_height), // service table (dynamic height)
-        log_constraint,                   // log pane
-        Constraint::Length(4),            // command palette
-        Constraint::Length(1),            // status / input line
+    // Centering horizontal split (Codex Page width: 75% of screen, capped at 96 columns)
+    let page_width = (area.width * 75 / 100).clamp(60, 96);
+    let horizontal_padding = area.width.saturating_sub(page_width) / 2;
+    let page_areas = Layout::horizontal([
+        Constraint::Length(horizontal_padding),
+        Constraint::Length(page_width),
+        Constraint::Length(horizontal_padding),
     ])
-    .split(frame.area());
+    .split(area);
 
-    draw_title(frame, areas[0], rows);
-    draw_table(frame, areas[1], app, rows);
+    let active_area = page_areas[1];
+
+    let areas = if app.show_logs {
+        let splits = Layout::vertical([
+            Constraint::Length(6), // logo block (fbsy block letters)
+            Constraint::Length(1), // spacing
+            Constraint::Length(4), // prompt input box (ChatGPT/OpenCode style)
+            Constraint::Length(1), // spacing / guides row
+            log_constraint,        // log pane (execution output)
+            Constraint::Length(1), // footer line (~ and version)
+        ])
+        .split(active_area);
+        vec![
+            splits[0], splits[1], splits[2], splits[3], splits[4], splits[5],
+        ]
+    } else {
+        let total_height = active_area.height;
+        let content_height = 6 + 1 + 4 + 1; // Logo(6) + Spacing(1) + Input(4) + Guides/Spacing(1) = 12
+        let top_padding = total_height.saturating_sub(content_height + 1) / 2; // +1 for footer line
+
+        let vertical_splits = Layout::vertical([
+            Constraint::Length(top_padding),
+            Constraint::Length(6), // logo (index 1)
+            Constraint::Length(1), // spacing (index 2)
+            Constraint::Length(4), // input (index 3)
+            Constraint::Length(1), // guides (index 4)
+            Constraint::Min(1),    // bottom padding + footer (index 5)
+        ])
+        .split(active_area);
+
+        let footer_area = Rect {
+            x: active_area.x,
+            y: active_area.y + active_area.height.saturating_sub(1),
+            width: active_area.width,
+            height: 1,
+        };
+
+        vec![
+            vertical_splits[1], // areas[0] = logo
+            vertical_splits[2], // areas[1] = spacing
+            vertical_splits[3], // areas[2] = input
+            vertical_splits[4], // areas[3] = guides
+            Rect::default(),    // areas[4] = logs (unused)
+            footer_area,        // areas[5] = footer
+        ]
+    };
+
+    draw_logo(frame, areas[0]);
+    draw_status(frame, areas[2], app, rows);
+    draw_guides(frame, areas[3], app);
     if app.show_logs {
-        draw_logs(frame, areas[2], app, rows);
+        draw_logs(frame, areas[4], app, rows);
     }
-    draw_palette(frame, areas[3]);
-    draw_status(frame, areas[4], app);
+    draw_footer(frame, areas[5]);
 
     // The help overlay floats above everything else.
     if let Some(view) = &app.output {
@@ -841,124 +848,75 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     }
 }
 
-fn draw_title(frame: &mut Frame, area: Rect, rows: &[ServiceStatus]) {
-    let version = env!("CARGO_PKG_VERSION");
-    let running = rows.iter().filter(|r| r.running).count();
-    let ip = crate::support::network::lan_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-
-    let left = vec![
-        Span::styled(" fbsy v", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(version, Style::default().fg(Color::Cyan).bold()),
-        Span::raw("  ·  "),
-        Span::styled(format!("{running} running"), Style::default().bold()),
-        Span::raw("  ·  "),
-        Span::raw(ip),
+fn draw_logo(frame: &mut Frame, area: Rect) {
+    let logo = [
+        "███████╗██████╗ ███████╗██╗   ██╗",
+        "██╔════╝██╔══██╗██╔════╝╚██╗ ██╔╝",
+        "█████╗  ██████╔╝███████╗ ╚████╔╝ ",
+        "██╔══╝  ██╔══██╗╚════██║  ╚██╔╝  ",
+        "██║     ██████╔╝███████║   ██║   ",
+        "╚═╝     ╚═════╝ ╚══════╝   ╚═╝   ",
     ];
-    let right = vec![Span::styled(
-        " : commands · ? help · q quit ",
-        Style::default().dim(),
-    )];
+    let green = Color::Rgb(16, 163, 127);
+    let mut lines = Vec::new();
+    for line in &logo {
+        lines.push(
+            Line::from(vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(green).bold(),
+            )])
+            .alignment(ratatui::layout::Alignment::Center),
+        );
+    }
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, area);
+}
+
+fn draw_guides(frame: &mut Frame, area: Rect, app: &App) {
+    let dim = Color::Rgb(100, 100, 100);
+    let cyan = Color::Rgb(16, 163, 127);
+    let spans = if app.focus == Focus::Logs && app.show_logs {
+        vec![
+            Span::styled("Esc ", Style::default().fg(cyan).bold()),
+            Span::styled("input  ", Style::default().fg(dim)),
+            Span::styled("↑/↓ ", Style::default().fg(cyan).bold()),
+            Span::styled("scroll  ", Style::default().fg(dim)),
+            Span::styled("l ", Style::default().fg(cyan).bold()),
+            Span::styled("hide logs  ", Style::default().fg(dim)),
+            Span::styled("q ", Style::default().fg(cyan).bold()),
+            Span::styled("quit", Style::default().fg(dim)),
+        ]
+    } else {
+        vec![
+            Span::styled("tab ", Style::default().fg(cyan).bold()),
+            Span::styled("logs  ", Style::default().fg(dim)),
+            Span::styled("? ", Style::default().fg(cyan).bold()),
+            Span::styled("help  ", Style::default().fg(dim)),
+            Span::styled("q ", Style::default().fg(cyan).bold()),
+            Span::styled("quit", Style::default().fg(dim)),
+        ]
+    };
+    let line = Line::from(spans).alignment(ratatui::layout::Alignment::Right);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect) {
+    let version = env!("CARGO_PKG_VERSION");
+    let dim = Color::Rgb(80, 80, 80);
+    let left = vec![Span::styled("~", Style::default().fg(dim))];
+    let right = vec![Span::styled(version, Style::default().fg(dim))];
 
     let mut line = left;
-    // Simple right-alignment padding logic
     let left_len: usize = line.iter().map(|s| s.width()).sum();
     let right_len: usize = right.iter().map(|s| s.width()).sum();
     let space = area
         .width
-        .saturating_sub(left_len as u16 + right_len as u16 + 2); // +2 for borders
+        .saturating_sub(left_len as u16 + right_len as u16);
     if space > 0 {
         line.push(Span::raw(" ".repeat(space as usize)));
     }
     line.extend(right);
-
-    let title = Paragraph::new(Line::from(line)).block(Block::default().borders(Borders::ALL));
-    frame.render_widget(title, area);
-}
-
-fn draw_table(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
-    let header = Row::new(["SERVICE", "STATUS", "PID", "PORT", "UPTIME", "ADDRESS"])
-        .style(Style::default().add_modifier(Modifier::BOLD));
-
-    let body: Vec<Row> = rows
-        .iter()
-        .map(|r| {
-            let (status_text, status_color) = if r.running {
-                ("● running", Color::Green)
-            } else {
-                ("● stopped", Color::Red)
-            };
-            let pid = r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
-            let port = r.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
-            let uptime = r
-                .uptime_secs
-                .map(service::format_uptime_secs)
-                .unwrap_or_else(|| "-".into());
-            let address = if r.running {
-                r.url
-                    .clone()
-                    .unwrap_or_else(|| r.kind.description().to_string())
-            } else {
-                r.kind.description().to_string()
-            };
-            Row::new(vec![
-                Cell::from(if r.name == r.kind.name() {
-                    r.kind.name().to_string()
-                } else {
-                    format!("{} ({})", r.name, r.kind.name())
-                }),
-                Cell::from(status_text).style(Style::default().fg(status_color)),
-                Cell::from(pid),
-                Cell::from(port),
-                Cell::from(uptime),
-                Cell::from(address),
-            ])
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(8),
-        Constraint::Length(6),
-        Constraint::Length(10),
-        Constraint::Min(22),
-    ];
-
-    let focused = app.focus == Focus::Table;
-    let (title, border_style) = if focused {
-        (" services (focus) ", Style::default().fg(Color::Cyan))
-    } else {
-        (" services ", Style::default().dim())
-    };
-    let table = Table::new(body, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        )
-        .row_highlight_style(
-            Style::default()
-                .bg(if focused {
-                    Color::DarkGray
-                } else {
-                    Color::Reset
-                })
-                .fg(if focused {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                })
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(if focused { "▶ " } else { "  " });
-
-    let mut state = TableState::default();
-    state.select(Some(app.selected));
-    frame.render_stateful_widget(table, area, &mut state);
+    frame.render_widget(Paragraph::new(Line::from(line)), area);
 }
 
 fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
@@ -974,16 +932,16 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
         service::tail_lines(&log_path, LOG_TAIL)
     };
 
+    let green = Color::Rgb(16, 163, 127);
     let (start, end, scroll, max_scroll) = log_window_bounds(lines.len(), visible, app.log_scroll);
     let shown: Vec<Line> = if lines.is_empty() {
         vec![Line::from(
-            "(no log output yet; start a service or run `fbsy logs <instance>`)",
+            "(no execution output yet; start the bridge service to view logs)",
         )]
     } else {
         lines[start..end]
             .iter()
             .map(|line| {
-                // Dim timestamps, colorize errors
                 if line.contains("ERROR") {
                     Line::from(Span::styled(line.clone(), Style::default().fg(Color::Red)))
                 } else if line.contains("WARN") {
@@ -993,10 +951,19 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
                     ))
                 } else if line.len() > 30 && line.chars().next().unwrap_or(' ').is_numeric() {
                     let (ts, rest) = line.split_at(30);
-                    Line::from(vec![
-                        Span::styled(ts.to_string(), Style::default().dim()),
-                        Span::raw(rest.to_string()),
-                    ])
+                    let rest_spans = if rest.contains("INFO") {
+                        vec![
+                            Span::styled(ts.to_string(), Style::default().dim()),
+                            Span::styled("INFO", Style::default().fg(green).bold()),
+                            Span::raw(rest.replace("INFO", "")),
+                        ]
+                    } else {
+                        vec![
+                            Span::styled(ts.to_string(), Style::default().dim()),
+                            Span::raw(rest.to_string()),
+                        ]
+                    };
+                    Line::from(rest_spans)
                 } else {
                     Line::from(line.clone())
                 }
@@ -1004,39 +971,30 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
             .collect()
     };
 
-    let title_base = if app.all_logs {
-        "logs: all running instances".to_string()
-    } else {
-        let row = rows.get(app.selected);
-        format!(
-            "logs: {} ({})",
-            row.map(|r| r.name.as_str()).unwrap_or("bridge"),
-            if row.map(|r| r.running).unwrap_or(false) {
-                "running"
-            } else {
-                "stopped"
-            }
-        )
-    };
+    let title_base = " execution output ";
 
     let scroll_label = if max_scroll == 0 {
         "".to_string()
     } else if scroll == 0 {
-        format!(" ▼ newest · {} older ", max_scroll)
+        format!(" [newest · {} older] ", max_scroll)
     } else if scroll == max_scroll {
-        format!(" ▲ oldest [{scroll}/{max_scroll}] ")
+        format!(" [oldest · {}/{}] ", scroll, max_scroll)
     } else {
-        format!(" [{scroll}/{max_scroll}] ")
+        format!(" [{}/{}] ", scroll, max_scroll)
     };
 
     let focused = app.focus == Focus::Logs;
-    let focus_tag = if focused { " (focus)" } else { "" };
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(green)
     } else {
-        Style::default().dim()
+        Style::default().fg(Color::Rgb(60, 60, 60))
     };
-    let title = format!(" {title_base}{focus_tag}{scroll_label} ");
+    let title = format!(
+        " {}{}{} ",
+        title_base,
+        if focused { " (focus)" } else { "" },
+        scroll_label
+    );
     let para = Paragraph::new(shown).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1062,75 +1020,89 @@ fn log_window_bounds(
     (start, end, scroll, max_scroll)
 }
 
-fn draw_palette(frame: &mut Frame, area: Rect) {
-    let key = |k: &str, d: &str| -> Vec<Span<'static>> {
-        vec![
-            Span::styled(format!(" {k:<3} "), Style::default().fg(Color::Cyan).bold()),
-            Span::raw(format!("{d:<14}")),
-        ]
-    };
-    let mut line1 = Vec::new();
-    line1.extend(key("Tab", "focus"));
-    line1.extend(key("↑/↓", "scroll"));
-    line1.extend(key("s", "start"));
-    line1.extend(key("x", "stop"));
-    line1.extend(key("r", "restart"));
-    line1.extend(key("y", "sync"));
+fn draw_status(frame: &mut Frame, area: Rect, app: &App, rows: &[ServiceStatus]) {
+    let blue = Color::Rgb(59, 130, 246);
+    let orange = Color::Rgb(245, 158, 11);
+    let dark_bg = Color::Rgb(25, 26, 27);
+    let dim = Color::Rgb(120, 120, 120);
 
-    let mut line2 = Vec::new();
-    line2.extend(key("l", "logs"));
-    line2.extend(key("a", "all logs"));
-    line2.extend(key("?", "help"));
-    line2.extend(key("q", "quit"));
-    line2.extend(vec![
-        Span::styled(" : ", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(
-            "type any CLI command without `fbsy` (e.g. `show`, `scan`)",
-            Style::default().dim(),
-        ),
+    let (status_text, is_active) = if let Some(bridge) = rows.iter().find(|r| r.name == "bridge") {
+        if bridge.running {
+            let pid_str = bridge
+                .pid
+                .map(|p| format!(" (PID: {})", p))
+                .unwrap_or_default();
+            (format!("AtBridge ● ACTIVE{}", pid_str), true)
+        } else {
+            ("AtBridge ● OFFLINE".to_string(), false)
+        }
+    } else {
+        ("AtBridge ● OFFLINE".to_string(), false)
+    };
+
+    let sync_status = if is_active { "active" } else { "idle" };
+
+    let placeholder = if area.width < 75 {
+        "Ask anything... \"s: start · l: logs · q: quit\""
+    } else {
+        "Ask anything... \"s to start bridge · l to view logs · q to quit\""
+    };
+
+    let prompt_line = match app.mode {
+        Mode::Command => {
+            if app.input.is_empty() {
+                Line::from(vec![
+                    Span::styled(" ┃ ", Style::default().fg(blue).bold()),
+                    Span::styled(" › ", Style::default().fg(blue).bold()),
+                    Span::styled("Ask anything...", Style::default().fg(dim)),
+                    Span::styled("█", Style::default().fg(blue)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(" ┃ ", Style::default().fg(blue).bold()),
+                    Span::styled(" › ", Style::default().fg(blue).bold()),
+                    Span::raw(app.input.clone()),
+                    Span::styled("█", Style::default().fg(blue)),
+                ])
+            }
+        }
+        Mode::Normal => Line::from(vec![
+            Span::styled(" ┃ ", Style::default().fg(blue).bold()),
+            Span::styled(placeholder, Style::default().fg(dim)),
+        ]),
+    };
+
+    let details_line = Line::from(vec![
+        Span::styled(" ┃ ", Style::default().fg(blue).bold()),
+        Span::styled("Bridge", Style::default().fg(blue).bold()),
+        Span::styled("  ·  ", Style::default().fg(dim)),
+        Span::raw(status_text),
+        Span::styled("  ·  ", Style::default().fg(dim)),
+        Span::styled(sync_status, Style::default().fg(orange).bold()),
     ]);
 
-    let para = Paragraph::new(vec![Line::from(line1), Line::from(line2)])
-        .block(Block::default().borders(Borders::ALL).title(" commands "));
+    let border_color = if app.mode == Mode::Command {
+        blue
+    } else {
+        Color::Rgb(60, 60, 60)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .bg(dark_bg);
+
+    let para = Paragraph::new(vec![prompt_line, details_line]).block(block);
+
     frame.render_widget(para, area);
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    let (mode_str, mode_color) = match app.mode {
-        Mode::Normal => (" NORMAL ", Color::DarkGray),
-        Mode::Command => (" COMMAND ", Color::Yellow),
-    };
-
-    let line = match app.mode {
-        Mode::Command => Line::from(vec![
-            Span::styled(
-                mode_str,
-                Style::default().bg(mode_color).fg(Color::Black).bold(),
-            ),
-            Span::styled(" :", Style::default().fg(Color::Yellow).bold()),
-            Span::raw(app.input.clone()),
-            Span::styled("█", Style::default().fg(Color::Yellow)),
-        ]),
-        Mode::Normal => Line::from(vec![
-            Span::styled(
-                mode_str,
-                Style::default().bg(mode_color).fg(Color::White).bold(),
-            ),
-            Span::styled("  ", Style::default().dim()),
-            Span::styled(app.status.clone(), Style::default().fg(Color::Yellow)),
-        ]),
-    };
-    frame.render_widget(Paragraph::new(line), area);
-}
-
 fn dashboard_rows(mut rows: Vec<ServiceStatus>) -> Vec<ServiceStatus> {
-    for kind in ServiceKind::all() {
-        if rows.iter().any(|row| row.name == kind.name()) {
-            continue;
-        }
+    rows.retain(|row| row.name == "bridge");
+    if rows.is_empty() {
         rows.push(ServiceStatus {
-            name: kind.name().to_string(),
-            kind,
+            name: "bridge".to_string(),
+            kind: ServiceKind::AtBridge,
             running: false,
             pid: None,
             port: None,
@@ -1138,26 +1110,12 @@ fn dashboard_rows(mut rows: Vec<ServiceStatus>) -> Vec<ServiceStatus> {
             uptime_secs: None,
         });
     }
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
-    rows.sort_by_key(|row| row.kind as u8);
     rows
-}
-
-fn row_index_by_name_or_kind(rows: &[ServiceStatus], name: &str) -> Option<usize> {
-    rows.iter()
-        .position(|row| row.name == name)
-        .or_else(|| rows.iter().position(|row| row.kind.name() == name))
-}
-
-fn row_by_name_or_kind<'a>(rows: &'a [ServiceStatus], name: &str) -> Option<&'a ServiceStatus> {
-    row_index_by_name_or_kind(rows, name).and_then(|index| rows.get(index))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        expand_dashboard_alias, log_window_bounds, should_run_attached, split_command_line,
-    };
+    use super::{log_window_bounds, should_run_attached, split_command_line};
 
     #[test]
     fn command_line_splitter_keeps_quoted_paths_together() {
@@ -1170,36 +1128,10 @@ mod tests {
     }
 
     #[test]
-    fn command_aliases_expand_to_real_cli_commands() {
-        assert_eq!(
-            expand_dashboard_alias(vec![
-                "start".into(),
-                "zkteco".into(),
-                "--name".into(),
-                "dev1".into()
-            ]),
-            ["run", "zkteco", "--name", "dev1"]
-        );
-        assert_eq!(
-            expand_dashboard_alias(vec!["sync".into(), "GATE-01".into()]),
-            ["bridge", "sync", "--once", "--device", "GATE-01"]
-        );
-        assert_eq!(
-            expand_dashboard_alias(vec!["doctor".into(), "--json".into()]),
-            ["bridge", "doctor", "--json"]
-        );
-    }
-
-    #[test]
     fn interactive_commands_are_attached_to_the_real_terminal() {
-        assert!(should_run_attached(&[
-            "bridge".into(),
-            "config".into(),
-            "setup".into()
-        ]));
+        assert!(should_run_attached(&["uninstall".into()]));
         assert!(should_run_attached(&["update".into()]));
         assert!(!should_run_attached(&["update".into(), "--check".into()]));
-        assert!(!should_run_attached(&["show".into()]));
     }
 
     #[test]

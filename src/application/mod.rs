@@ -6,7 +6,6 @@
 pub mod autostart;
 pub mod config;
 pub mod dashboard;
-pub mod doctor;
 pub mod install;
 pub mod scanner;
 pub mod senseface;

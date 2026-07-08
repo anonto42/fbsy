@@ -51,19 +51,182 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
-/// Remove the installed binary. Data directories are left intact.
-pub fn uninstall() -> Result<()> {
+/// Remove the installed binary and/or data directories.
+pub fn uninstall(args: &crate::cli::UninstallArgs) -> Result<()> {
+    // 1. Stop all running services
+    println!(
+        "{} Checking for running services...",
+        style("→").cyan().bold()
+    );
+    match crate::runtime::registry::list() {
+        Ok(entries) => {
+            for entry in entries {
+                println!(
+                    "  Stopping service {} (pid {})...",
+                    style(&entry.service).cyan(),
+                    entry.pid
+                );
+                if let Err(err) = crate::application::service::stop_instance(&entry.service) {
+                    println!(
+                        "    {} Failed to stop service {}: {}",
+                        style("!").yellow().bold(),
+                        entry.service,
+                        err
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            println!(
+                "  {} Failed to list running services: {}",
+                style("!").yellow().bold(),
+                err
+            );
+        }
+    }
+
+    // 2. Decide if full delete
+    let mut full_delete = args.full;
+    if !args.full && !args.yes {
+        // If interactive, prompt the user
+        let options = [
+            "Just the software (removes binary and PATH shortcut; keeps config/logs)",
+            "Full delete (removes binary, PATH, and all config/logs/state directories)",
+        ];
+        if let Ok(choice) = dialoguer::Select::new()
+            .with_prompt("Select uninstall type:")
+            .items(&options)
+            .default(0)
+            .interact()
+        {
+            if choice == 1 {
+                full_delete = true;
+            }
+        }
+    }
+
+    // 3. Clean up PATH
     let dst = install_bin_path()?;
+    if let Some(_parent) = dst.parent() {
+        #[cfg(not(windows))]
+        {
+            if let Some(rc_path) = remove_from_shell_rc() {
+                println!(
+                    "{} Removed fbsy PATH line from {}",
+                    style("✔").green().bold(),
+                    rc_path.display()
+                );
+            }
+        }
+        #[cfg(windows)]
+        {
+            if let Err(err) = remove_from_windows_path(_parent) {
+                println!(
+                    "{} Could not remove fbsy from PATH: {}",
+                    style("!").yellow().bold(),
+                    err
+                );
+            } else {
+                println!("{} Removed fbsy from User PATH", style("✔").green().bold());
+            }
+        }
+    }
+
+    // 4. Remove binary
     if dst.exists() {
         remove_installed_binary(&dst)?;
     } else {
         println!("Nothing to remove at {}", dst.display());
     }
-    println!(
-        "Data dir left intact: {} (delete manually if desired)",
-        paths::base_dir().display()
+
+    // 5. Clean up data directories if Full Delete
+    if full_delete {
+        let base = paths::base_dir();
+        if base.exists() {
+            println!(
+                "{} Removing data directory {}...",
+                style("→").cyan().bold(),
+                base.display()
+            );
+            match std::fs::remove_dir_all(&base) {
+                Ok(()) => {
+                    println!(
+                        "{} Removed data directory {}",
+                        style("✔").green().bold(),
+                        style(base.display()).cyan()
+                    );
+                }
+                Err(err) => {
+                    println!(
+                        "{} Failed to remove data directory: {err}",
+                        style("!").yellow().bold()
+                    );
+                }
+            }
+        }
+    } else {
+        println!(
+            "Data directory left intact: {} (delete manually if desired)",
+            paths::base_dir().display()
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn remove_from_shell_rc() -> Option<PathBuf> {
+    const SENTINEL: &str = "# added by fbsy install";
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let rc = if shell_name == "fish" {
+        home.join(".config").join("fish").join("config.fish")
+    } else if shell_name == "zsh" {
+        home.join(".zshrc")
+    } else {
+        home.join(".bashrc")
+    };
+
+    if let Ok(content) = std::fs::read_to_string(&rc) {
+        if content.contains(SENTINEL) {
+            let lines: Vec<&str> = content
+                .lines()
+                .filter(|line| !line.contains(SENTINEL))
+                .collect();
+            let mut new_content = lines.join("\n");
+            if !new_content.is_empty() && !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            if std::fs::write(&rc, new_content).is_ok() {
+                return Some(rc);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn remove_from_windows_path(bin_dir: &std::path::Path) -> Result<()> {
+    use std::process::Command;
+    let script = format!(
+        "$installDir = '{}'; \
+         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User'); \
+         if ($userPath) {{ \
+             $entries = $userPath -split ';' | Where-Object {{ $_ -ne '' -and $_ -ne $installDir }}; \
+             $newPath = $entries -join ';'; \
+             [Environment]::SetEnvironmentVariable('Path', $newPath, 'User'); \
+         }}",
+        bin_dir.display().to_string().replace('\'', "''")
     );
-    println!("If a PATH line was added to your shell rc, remove it manually.");
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .context("remove from Windows PATH")?;
     Ok(())
 }
 
