@@ -118,6 +118,7 @@ impl DeviceClient for FakeClient {
 #[derive(Debug)]
 struct FakeHrms {
     fail: bool,
+    org_timezone: Option<String>,
     received_batches: Mutex<Vec<Vec<HrmsEvent>>>,
 }
 
@@ -125,6 +126,7 @@ impl FakeHrms {
     fn ok() -> Self {
         Self {
             fail: false,
+            org_timezone: None,
             received_batches: Mutex::new(Vec::new()),
         }
     }
@@ -132,12 +134,30 @@ impl FakeHrms {
     fn failing() -> Self {
         Self {
             fail: true,
+            org_timezone: None,
+            received_batches: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_org_timezone(timezone: &str) -> Self {
+        Self {
+            fail: false,
+            org_timezone: Some(timezone.to_string()),
             received_batches: Mutex::new(Vec::new()),
         }
     }
 
     fn call_count(&self) -> usize {
         self.received_batches.lock().expect("hrms lock").len()
+    }
+
+    fn last_batch(&self) -> Vec<HrmsEvent> {
+        self.received_batches
+            .lock()
+            .expect("hrms lock")
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -159,6 +179,7 @@ impl HrmsClient for FakeHrms {
             .push(events.to_vec());
         Ok(WebhookResult {
             received: events.len(),
+            org_timezone: self.org_timezone.clone(),
         })
     }
 }
@@ -313,6 +334,69 @@ fn overlapping_sync_is_rejected() {
     assert!(first.ok);
     assert!(!second.ok);
     assert!(second.message.contains("in progress"));
+}
+
+/// A device_code unique to this test module run, distinct from `device_config`'s
+/// "DEVICE-1", so persisted state files (last-result, org-timezone) don't
+/// collide with other tests that share that code.
+fn org_timezone_fallback_device_config() -> BridgeDeviceConfig {
+    let mut cfg = device_config(false);
+    cfg.device_code = "ORG-TZ-FALLBACK-TEST-DEVICE".to_string();
+    cfg
+}
+
+#[test]
+fn device_with_no_configured_timezone_learns_org_timezone_from_hrms_and_uses_it_next_sync() {
+    // Ensure a cold start: persisted state from a previous run of this same
+    // test (same device_code, same on-disk path) must not leak in and make
+    // the "first sync" assertion below spuriously pass/fail.
+    let cfg = org_timezone_fallback_device_config();
+    let _ = std::fs::remove_file(fingerbridge::support::paths::device_last_result_path(
+        &cfg.device_code,
+    ));
+    let _ = std::fs::remove_file(fingerbridge::support::paths::device_org_timezone_path(
+        &cfg.device_code,
+    ));
+
+    // First sync: no deviceTimezone configured and HRMS hasn't told us the org
+    // timezone yet, so the naive device timestamp is (wrongly, but
+    // unavoidably on a cold start) treated as UTC.
+    let connector = Arc::new(FakeConnector::with_attendance(vec![attendance(
+        "7",
+        "2026-07-07T15:51:07",
+        0,
+    )]));
+    let hrms = Arc::new(FakeHrms::with_org_timezone("Asia/Dhaka"));
+    let state = DeviceSyncState::new(
+        org_timezone_fallback_device_config(),
+        "https://example.test/webhook".to_string(),
+        connector.clone(),
+        hrms.clone(),
+    );
+
+    let first = state.sync_once();
+    assert!(first.ok);
+    let first_timestamp = hrms.last_batch()[0].timestamp.clone();
+    assert_eq!(first_timestamp, "2026-07-07T15:51:07+00:00");
+
+    // Second sync: the org timezone learned from the first response
+    // (Asia/Dhaka, UTC+6) is now applied, converting the naive device
+    // timestamp correctly instead of leaving it mislabeled as UTC.
+    let connector2 = Arc::new(FakeConnector::with_attendance(vec![attendance(
+        "7",
+        "2026-07-07T16:00:00",
+        0,
+    )]));
+    let state2 = DeviceSyncState::new(
+        org_timezone_fallback_device_config(),
+        "https://example.test/webhook".to_string(),
+        connector2,
+        hrms.clone(),
+    );
+    let second = state2.sync_once();
+    assert!(second.ok);
+    let second_timestamp = hrms.last_batch()[0].timestamp.clone();
+    assert_eq!(second_timestamp, "2026-07-07T16:00:00+06:00");
 }
 
 struct BlockingConnector {

@@ -63,6 +63,12 @@ pub fn device_last_result_path(device_code: &str) -> PathBuf {
     state_dir().join(format!("{device_code}.last-result.json"))
 }
 
+/// Persisted org timezone (IANA name) learned from the last HRMS webhook
+/// response for one device. Path: `state/<device_code>.org-timezone.txt`
+pub fn device_org_timezone_path(device_code: &str) -> PathBuf {
+    state_dir().join(format!("{device_code}.org-timezone.txt"))
+}
+
 /// Default config path used by CLI commands.
 pub fn default_config_path() -> PathBuf {
     config_dir().join("config.json")

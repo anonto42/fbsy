@@ -746,6 +746,18 @@ fn decode_40byte_records(data: &[u8]) -> Result<Vec<RawAttendance>, DeviceError>
     Ok(out)
 }
 
+/// Decode the ZKTeco device's packed timestamp into a **naive** (offset-less)
+/// ISO-8601-shaped string.
+///
+/// The device encodes its own local wall-clock time — it is NOT UTC. This
+/// function must not attach a `+00:00`/`Z` suffix: doing so previously caused
+/// `event::parse_timestamp` to treat the value as already offset-aware (via
+/// `DateTime::parse_from_rfc3339`), silently skipping the configured device
+/// timezone offset and recording every punch as if the device's local clock
+/// were UTC. Emitting a naive string here lets `parse_timestamp`'s
+/// offset-aware path (`parse_naive_timestamp` + `offset.from_local_datetime`)
+/// correctly convert the device's local time to UTC using the configured
+/// `deviceTimezone`.
 fn decode_timestamp(value: u32) -> String {
     let second = value % 60;
     let t = value / 60;
@@ -757,7 +769,7 @@ fn decode_timestamp(value: u32) -> String {
     let t = t / 31;
     let month = (t % 12) + 1;
     let year = (t / 12) + 2000;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+00:00")
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
 }
 
 // ── User & template decoding (pyzk get_users / get_templates) ──────────────────
@@ -1017,5 +1029,41 @@ mod tests {
         map.insert(1u32, ("uid1".to_string(), "Alice".to_string()));
         // Payload too short to contain a real template — should return empty, not panic.
         fuzz_templates(&[0u8; 8], &map);
+    }
+
+    #[test]
+    fn decode_timestamp_is_naive_with_no_offset_suffix() {
+        // 2026-07-07 15:51:07, encoded per the ZKTeco packed-timestamp scheme.
+        let year = 2026u32 - 2000;
+        let month = 7u32 - 1;
+        let day = 7u32 - 1;
+        let encoded = (((year * 12 + month) * 31 + day) * 24 + 15) * 60 * 60 + 51 * 60 + 7;
+        let decoded = decode_timestamp(encoded);
+
+        assert_eq!(decoded, "2026-07-07T15:51:07");
+        assert!(
+            !decoded.contains('+') && !decoded.contains('Z'),
+            "decode_timestamp must not attach an offset — the caller (event::parse_timestamp) \
+             applies the configured device timezone; a baked-in offset here silently discards it"
+        );
+    }
+
+    #[test]
+    fn decoded_timestamp_round_trips_through_configured_offset() {
+        use crate::domain::{parse_timestamp, parse_utc_offset};
+
+        let year = 2026u32 - 2000;
+        let month = 7u32 - 1;
+        let day = 7u32 - 1;
+        let encoded = (((year * 12 + month) * 31 + day) * 24 + 15) * 60 * 60 + 51 * 60 + 7;
+        let decoded = decode_timestamp(encoded);
+
+        // Asia/Dhaka is UTC+6 — the device's local 15:51:07 must be tagged
+        // with the +06:00 offset (equivalent instant: 09:51:07 UTC), not
+        // left untagged/mislabeled as UTC.
+        let offset = parse_utc_offset("+06:00").expect("valid offset");
+        let hrms_timestamp = parse_timestamp(&decoded, offset).expect("parses");
+
+        assert_eq!(hrms_timestamp, "2026-07-07T15:51:07+06:00");
     }
 }

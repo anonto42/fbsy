@@ -49,10 +49,14 @@ impl HrmsClient for ReqwestHrmsClient {
         events: &[HrmsEvent],
     ) -> Result<WebhookResult, HrmsError> {
         if events.is_empty() {
-            return Ok(WebhookResult { received: 0 });
+            return Ok(WebhookResult {
+                received: 0,
+                org_timezone: None,
+            });
         }
 
         let mut received = 0;
+        let mut org_timezone = None;
         for chunk in events.chunks(BATCH_SIZE) {
             let payload = WebhookPayload {
                 organization_id: device.organization_id,
@@ -62,8 +66,14 @@ impl HrmsClient for ReqwestHrmsClient {
             };
             let response = self.post_with_retry(webhook_url, &payload)?;
             received += parse_received(&response, chunk.len())?;
+            if let Some(tz) = parse_org_timezone(&response) {
+                org_timezone = Some(tz);
+            }
         }
-        Ok(WebhookResult { received })
+        Ok(WebhookResult {
+            received,
+            org_timezone,
+        })
     }
 }
 
@@ -264,6 +274,19 @@ fn parse_received(value: &Value, fallback: usize) -> Result<usize, HrmsError> {
         return Ok(fallback);
     }
     Ok(fallback)
+}
+
+/// Extract `orgTimezone` from either the wrapped (`data.orgTimezone`) or flat
+/// (`orgTimezone`) response envelope. Absent/non-string values yield `None`
+/// rather than an error — an older HRMS deployment that doesn't send this
+/// field yet must not break the webhook call.
+fn parse_org_timezone(value: &Value) -> Option<String> {
+    value
+        .get("data")
+        .and_then(|data| data.get("orgTimezone"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("orgTimezone").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 fn parse_jobs_response(body: &str) -> Result<Vec<PendingJob>, HrmsError> {

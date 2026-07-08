@@ -26,6 +26,14 @@ pub enum HrmsError {
 pub struct WebhookResult {
     /// Number of records accepted by HRMS.
     pub received: usize,
+    /// The organization's configured IANA timezone, if HRMS returned one.
+    ///
+    /// Used as a fallback source of truth when this device has no explicit
+    /// `deviceTimezone` configured locally — HRMS becomes the single source
+    /// of truth for the org's timezone instead of requiring every bridge
+    /// deployment to have it configured (and risking drift if it's ever
+    /// changed in HRMS but not in the field).
+    pub org_timezone: Option<String>,
 }
 
 /// Abstraction for sending attendance events to HRMS.

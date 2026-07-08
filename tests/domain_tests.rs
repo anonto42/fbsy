@@ -1,7 +1,7 @@
 use chrono::FixedOffset;
 use fingerbridge::domain::{
-    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset, to_hrms_events,
-    RawAttendance,
+    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset,
+    resolve_iana_timezone_offset, to_hrms_events, RawAttendance,
 };
 use serde_json::json;
 
@@ -120,4 +120,21 @@ fn event_serializes_to_exact_hrms_field_names() {
             "verificationMethod": "fingerbridge"
         })
     );
+}
+
+#[test]
+fn resolve_iana_timezone_offset_recognizes_asia_dhaka() {
+    let offset = resolve_iana_timezone_offset("Asia/Dhaka").expect("known IANA name");
+    assert_eq!(offset, FixedOffset::east_opt(6 * 3600).unwrap());
+}
+
+#[test]
+fn resolve_iana_timezone_offset_rejects_unknown_name() {
+    assert!(resolve_iana_timezone_offset("Not/ARealZone").is_none());
+}
+
+#[test]
+fn resolve_iana_timezone_offset_trims_whitespace() {
+    let offset = resolve_iana_timezone_offset("  Asia/Dhaka  ").expect("trims whitespace");
+    assert_eq!(offset, FixedOffset::east_opt(6 * 3600).unwrap());
 }

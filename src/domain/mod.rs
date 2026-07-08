@@ -11,8 +11,8 @@ pub mod template;
 
 pub use attendance::RawAttendance;
 pub use event::{
-    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset, to_hrms_events,
-    HrmsEvent,
+    default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset,
+    resolve_iana_timezone_offset, to_hrms_events, HrmsEvent,
 };
 pub use sync_result::SyncResult;
 pub use template::{DeviceUser, FingerTemplate, FingerTemplatePayload};

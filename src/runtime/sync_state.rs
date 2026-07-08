@@ -8,7 +8,10 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     config::BridgeDeviceConfig,
-    domain::{to_hrms_events, SyncResult},
+    domain::{
+        default_utc_offset, parse_utc_offset, resolve_iana_timezone_offset, to_hrms_events,
+        SyncResult,
+    },
     ports::{
         device::{DeviceClient, DeviceConnector},
         hrms::HrmsClient,
@@ -18,6 +21,7 @@ use crate::{
         paths,
     },
 };
+use chrono::FixedOffset;
 
 /// Runtime state for one configured device.
 pub struct DeviceSyncState {
@@ -28,6 +32,10 @@ pub struct DeviceSyncState {
     log_progress: bool,
     lock: Mutex<()>,
     last_result: Mutex<Option<SyncResult>>,
+    /// Org timezone learned from the last HRMS webhook response. Used as a
+    /// fallback when this device has no explicit `deviceTimezone` configured
+    /// — see `resolve_utc_offset`.
+    learned_org_timezone: Mutex<Option<String>>,
 }
 
 impl DeviceSyncState {
@@ -38,6 +46,7 @@ impl DeviceSyncState {
         hrms: Arc<dyn HrmsClient>,
     ) -> Self {
         let persisted = load_last_result(&device.device_code);
+        let learned_org_timezone = load_learned_org_timezone(&device.device_code);
         Self {
             device,
             webhook_url,
@@ -46,6 +55,54 @@ impl DeviceSyncState {
             log_progress: false,
             lock: Mutex::new(()),
             last_result: Mutex::new(persisted),
+            learned_org_timezone: Mutex::new(learned_org_timezone),
+        }
+    }
+
+    /// Resolve the UTC offset to use for this sync: an explicit
+    /// `deviceTimezone` in config always wins; otherwise fall back to the
+    /// org timezone last learned from HRMS; otherwise UTC.
+    ///
+    /// This means a fresh bridge install with no `deviceTimezone` set is
+    /// wrong-by-default only until its first successful sync teaches it the
+    /// org's real timezone — after that it self-corrects and stays correct
+    /// even if the org's timezone is later changed in HRMS (no redeploy
+    /// needed), instead of requiring every on-site config to be kept in
+    /// sync by hand.
+    fn resolve_utc_offset(&self) -> FixedOffset {
+        if let Some(offset) = self
+            .device
+            .device_timezone
+            .as_deref()
+            .and_then(parse_utc_offset)
+        {
+            return offset;
+        }
+        if let Ok(learned) = self.learned_org_timezone.lock() {
+            if let Some(offset) = learned.as_deref().and_then(resolve_iana_timezone_offset) {
+                return offset;
+            }
+        }
+        default_utc_offset()
+    }
+
+    /// Record the org timezone HRMS returned in the last webhook response, so
+    /// the next sync's `resolve_utc_offset` can use it. No-op if HRMS didn't
+    /// send one (older HRMS deployments, or the field is temporarily absent).
+    fn learn_org_timezone(&self, org_timezone: Option<&str>) {
+        let Some(tz) = org_timezone else { return };
+        if let Ok(mut learned) = self.learned_org_timezone.lock() {
+            if learned.as_deref() != Some(tz) {
+                self.log(
+                    Level::Info,
+                    format_args!(
+                        "org timezone learned from HRMS: {:?} -> {tz:?}",
+                        learned.as_deref()
+                    ),
+                );
+                *learned = Some(tz.to_string());
+                save_learned_org_timezone(&self.device.device_code, tz);
+            }
         }
     }
 
@@ -160,7 +217,7 @@ impl DeviceSyncState {
             }
         };
 
-        let events = to_hrms_events(&attendance, self.device.utc_offset());
+        let events = to_hrms_events(&attendance, self.resolve_utc_offset());
         self.log(
             Level::Info,
             format_args!(
@@ -199,6 +256,7 @@ impl DeviceSyncState {
                         events.len()
                     ),
                 );
+                self.learn_org_timezone(result.org_timezone.as_deref());
                 result
             }
             Err(err) => {
@@ -308,6 +366,34 @@ fn save_last_result(device_code: &str, result: &SyncResult) {
         if std::fs::write(&tmp, format!("{body}\n")).is_ok() {
             let _ = std::fs::rename(&tmp, &path);
         }
+    }
+}
+
+/// Read the persisted org timezone for a device from disk, if any. Survives
+/// bridge restarts so a device doesn't fall back to UTC on every boot while
+/// waiting for its first sync of the process lifetime to complete.
+fn load_learned_org_timezone(device_code: &str) -> Option<String> {
+    let path = paths::device_org_timezone_path(device_code);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Atomically persist the learned org timezone for a device. Best-effort:
+/// a failed write only means the in-memory value (still correct for the
+/// remainder of this process's lifetime) isn't available after a restart.
+fn save_learned_org_timezone(device_code: &str, timezone: &str) {
+    let path = paths::device_org_timezone_path(device_code);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("txt.tmp");
+    if std::fs::write(&tmp, timezone).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 

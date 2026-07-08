@@ -1,6 +1,6 @@
 //! Conversion from device attendance records to HRMS webhook events.
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::RawAttendance;
@@ -69,6 +69,26 @@ pub fn parse_utc_offset(value: &str) -> Option<FixedOffset> {
 /// The UTC offset used when a device has no configured timezone.
 pub fn default_utc_offset() -> FixedOffset {
     FixedOffset::east_opt(0).expect("zero offset is always valid")
+}
+
+/// Resolve an IANA timezone name (e.g. `"Asia/Dhaka"`, as sent by HRMS in
+/// `orgTimezone`) into the fixed UTC offset currently in effect for it.
+///
+/// This intentionally resolves against *today's* date rather than caching a
+/// single offset forever, so a timezone with DST still gets the correct
+/// offset for whenever the bridge actually starts using it — even though
+/// individual sync cycles then apply that one resolved offset uniformly
+/// (matching this bridge's fixed-offset-per-sync design; see
+/// `parse_utc_offset` for why full IANA/DST-aware parsing isn't used
+/// per-timestamp).
+///
+/// Returns `None` if the name isn't a recognized IANA timezone.
+pub fn resolve_iana_timezone_offset(name: &str) -> Option<FixedOffset> {
+    use chrono::Offset;
+
+    let tz: chrono_tz::Tz = name.trim().parse().ok()?;
+    let now = Utc::now().with_timezone(&tz);
+    Some(now.offset().fix())
 }
 
 /// Parse a device timestamp into the offset-aware ISO string sent to HRMS.
