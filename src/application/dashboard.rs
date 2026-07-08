@@ -605,9 +605,9 @@ fn draw_home_page(
     bridge: &ServiceStatus,
     sync_line: &str,
 ) {
-    // Logo(6) + Spacing(1) + Input(5) + Guides(1) + Spacing(1) + Palette(7)
+    // Logo(6) + Spacing(1) + Input(5) + Guides(1) + Spacing(1) + Palette(8)
     // On short terminals drop the palette rather than clipping it mid-line.
-    let palette_height = if active_area.height >= 23 { 7u16 } else { 0 };
+    let palette_height = if active_area.height >= 24 { 8u16 } else { 0 };
     let content_height = 6 + 1 + 5 + 1 + 1 + palette_height;
     let top_padding = active_area
         .height
@@ -694,8 +694,14 @@ fn draw_palette(frame: &mut Frame, area: Rect) {
         pair(
             "logs   tab",
             "open the output page",
+            "install",
+            "install fbsy to this user",
+        ),
+        pair(
             "quit   q",
             "exit the dashboard",
+            "uninstall",
+            "remove fbsy from this machine",
         ),
     ];
 
