@@ -31,6 +31,10 @@ pub fn run(cli: Cli) -> Result<()> {
         }),
         Command::Dashboard => application::dashboard::run(),
         Command::Setup => application::setup::run(),
+        Command::Config => {
+            application::config::validate(None)?;
+            application::config::show(None)
+        }
         Command::Start => {
             let pid = application::service::default_start(crate::services::ServiceKind::AtBridge)?;
             println!("started bridge (pid {pid})");

@@ -19,6 +19,8 @@ pub enum Command {
     Dashboard,
     /// Interactive setup wizard: configure HRMS connection and devices.
     Setup,
+    /// Check the config: validate it and print a redacted view.
+    Config,
     /// Start the bridge service in the background.
     Start,
     /// Stop the running bridge service.
