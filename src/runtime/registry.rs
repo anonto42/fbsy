@@ -32,6 +32,10 @@ pub struct RegistryEntry {
     pub started_at: String,
     /// Executable path used to spawn (guards against pid reuse).
     pub exe: String,
+    /// Log file used by the service. Older registry files did not have this;
+    /// callers should fall back to the default service log path.
+    #[serde(default)]
+    pub log_path: Option<String>,
 }
 
 impl RegistryEntry {
@@ -117,6 +121,7 @@ mod tests {
             args: vec![],
             started_at: String::new(),
             exe: String::new(),
+            log_path: None,
         }
     }
 

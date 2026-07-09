@@ -82,6 +82,7 @@ pub fn spawn_service_with_exe(
         args: args.to_vec(),
         started_at: Utc::now().to_rfc3339(),
         exe: exe.display().to_string(),
+        log_path: Some(log.display().to_string()),
     })?;
     Ok(pid)
 }
@@ -235,6 +236,8 @@ pub fn run_supervised(service: &str, rest: &[String]) -> Result<()> {
         _ => None,
     };
     let exe = std::env::current_exe().unwrap_or_default();
+    let (log_path, _) = extract_log_path(rest);
+    let log_path = log_path.unwrap_or_else(|| paths::service_log_path(&name));
     registry::write(&RegistryEntry {
         service: name.clone(),
         kind: kind.name().to_string(),
@@ -244,6 +247,7 @@ pub fn run_supervised(service: &str, rest: &[String]) -> Result<()> {
         args: rest.to_vec(),
         started_at: Utc::now().to_rfc3339(),
         exe: exe.display().to_string(),
+        log_path: Some(log_path.display().to_string()),
     })?;
 
     exec_internal(service, rest)
@@ -408,7 +412,7 @@ fn boot_label(name: &str) -> String {
 
 /// Show one instance's status and where to find its logs.
 pub fn status(name: &str) -> Result<()> {
-    let log = paths::service_log_path(name);
+    let log = log_path_for(name);
     match registry::read(name)? {
         Some(entry) if process::is_alive(entry.pid, Some(&entry.exe)) => {
             let kind = entry.kind();
@@ -472,10 +476,28 @@ fn address_hints(kind: ServiceKind, url: Option<&str>) -> Vec<String> {
 
 /// Print the last `lines` of an instance's log file (optionally follow).
 pub fn logs(name: &str, lines: usize, follow: bool) -> Result<()> {
-    let log = paths::service_log_path(name);
+    let candidates = log_path_candidates(name);
+    let log = candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            candidates
+                .first()
+                .cloned()
+                .unwrap_or_else(|| paths::service_log_path(name))
+        });
 
     if !log.exists() {
-        println!("No log file yet at {}", log.display());
+        println!("No log file yet.");
+        println!("  Expected: {}", log.display());
+        for alt in candidates.iter().filter(|path| **path != log) {
+            println!("  Also checked: {}", alt.display());
+        }
+        println!(
+            "  Start or restart the bridge with {}.",
+            style("fbsy restart").cyan()
+        );
         return Ok(());
     }
 
@@ -505,7 +527,7 @@ pub fn tail_all_running(per_instance: usize) -> Vec<String> {
     let mut rows: Vec<(DateTime<Utc>, usize, String, String)> = Vec::new();
     let mut seq = 0usize;
     for s in snapshot() {
-        let log = paths::service_log_path(&s.name);
+        let log = log_path_for(&s.name);
         // Carry-forward time starts at the epoch so untimestamped leading lines
         // sort before the first real event rather than to "now".
         let mut carry = DateTime::<Utc>::MIN_UTC;
@@ -522,6 +544,44 @@ pub fn tail_all_running(per_instance: usize) -> Vec<String> {
     rows.into_iter()
         .map(|(_, _, name, line)| format!("[{name}] {line}"))
         .collect()
+}
+
+/// Best log path for a service. Prefer an existing registered path, then the
+/// registered path itself, then the computed default for older registry files.
+pub fn log_path_for(name: &str) -> PathBuf {
+    let candidates = log_path_candidates(name);
+    candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .or_else(|| candidates.first().cloned())
+        .unwrap_or_else(|| paths::service_log_path(name))
+}
+
+fn log_path_candidates(name: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(Some(entry)) = registry::read(name) {
+        if let Some(path) = log_path_from_entry(&entry) {
+            push_unique_path(&mut out, path);
+        }
+    }
+    push_unique_path(&mut out, paths::service_log_path(name));
+    out
+}
+
+fn log_path_from_entry(entry: &RegistryEntry) -> Option<PathBuf> {
+    entry
+        .log_path
+        .as_ref()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| extract_log_path(&entry.args).0)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 fn follow_log(log: &std::path::Path, mut offset: usize) -> Result<()> {
@@ -826,4 +886,47 @@ fn extract_log_path(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>
         i += 1;
     }
     (path, rest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(args: Vec<String>, log_path: Option<&str>) -> RegistryEntry {
+        RegistryEntry {
+            service: "bridge".to_string(),
+            kind: "bridge".to_string(),
+            pid: 1,
+            port: None,
+            url: None,
+            args,
+            started_at: String::new(),
+            exe: String::new(),
+            log_path: log_path.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn log_path_from_entry_prefers_registry_field() {
+        let entry = entry(
+            vec!["--log-path".to_string(), "/tmp/old.log".to_string()],
+            Some("/tmp/current.log"),
+        );
+        assert_eq!(
+            log_path_from_entry(&entry),
+            Some(PathBuf::from("/tmp/current.log"))
+        );
+    }
+
+    #[test]
+    fn log_path_from_entry_supports_legacy_log_arg() {
+        let entry = entry(
+            vec!["--log-path".to_string(), "/tmp/legacy.log".to_string()],
+            None,
+        );
+        assert_eq!(
+            log_path_from_entry(&entry),
+            Some(PathBuf::from("/tmp/legacy.log"))
+        );
+    }
 }

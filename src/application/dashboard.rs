@@ -943,7 +943,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
 
 fn draw_logs(frame: &mut Frame, area: Rect, app: &App) {
     let visible = area.height.saturating_sub(2).max(1) as usize;
-    let log_path = paths::service_log_path(ServiceKind::AtBridge.name());
+    let log_path = service::log_path_for(ServiceKind::AtBridge.name());
     let lines = service::tail_lines(&log_path, LOG_TAIL);
 
     let green = Color::Rgb(16, 163, 127);

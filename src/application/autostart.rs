@@ -130,7 +130,7 @@ pub fn systemd_unit(ctx: &UnitCtx) -> String {
          \n\
          [Service]\n\
          Type=simple\n\
-         ExecStart={exe} __service-supervised {name} --config {config}\n\
+         ExecStart={exe} __service-supervised {name} --config {config} --log-path {log}\n\
          Restart=always\n\
          RestartSec=3\n\
          StandardOutput=append:{log}\n\
@@ -159,6 +159,8 @@ pub fn launchd_plist(ctx: &UnitCtx) -> String {
          \x20   <string>{name}</string>\n\
          \x20   <string>--config</string>\n\
          \x20   <string>{config}</string>\n\
+         \x20   <string>--log-path</string>\n\
+         \x20   <string>{log}</string>\n\
          \x20 </array>\n\
          \x20 <key>RunAtLoad</key>\n  <true/>\n\
          \x20 <key>KeepAlive</key>\n  <true/>\n\
@@ -198,10 +200,28 @@ pub fn schtasks_create_args(ctx: &UnitCtx) -> Vec<String> {
 /// VBScript escapes a quote inside a string by doubling it.
 pub fn windows_launcher_vbs(ctx: &UnitCtx) -> String {
     format!(
-        "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" __service-supervised {name} --config \"\"{config}\"\"\", 0, False\r\n",
+        "Set shell = CreateObject(\"WScript.Shell\")\r\n\
+         shell.Run \"cmd.exe /C call \" & Chr(34) & \"{cmd}\" & Chr(34), 0, False\r\n",
+        cmd = windows_launcher_cmd_path(ctx).display(),
+    )
+}
+
+/// Contents of the Windows command launcher. The VBS wrapper runs this hidden,
+/// while the command file handles normal shell redirection into the bridge log.
+pub fn windows_launcher_cmd(ctx: &UnitCtx) -> String {
+    let log_dir = ctx
+        .log
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    format!(
+        "@echo off\r\n\
+         if not exist \"{log_dir}\" mkdir \"{log_dir}\"\r\n\
+         \"{exe}\" __service-supervised {name} --config \"{config}\" --log-path \"{log}\" >> \"{log}\" 2>&1\r\n",
         exe = ctx.exe.display(),
         name = ctx.name,
         config = ctx.config.display(),
+        log = ctx.log.display(),
     )
 }
 
@@ -209,11 +229,22 @@ pub fn windows_launcher_vbs(ctx: &UnitCtx) -> String {
 /// `<base>/run/<name>-launcher.vbs` (derived from the config path so the
 /// renderer stays pure and testable).
 pub fn launcher_vbs_path(ctx: &UnitCtx) -> PathBuf {
+    launcher_path(ctx, "vbs")
+}
+
+pub fn windows_launcher_cmd_path(ctx: &UnitCtx) -> PathBuf {
+    launcher_path(ctx, "cmd")
+}
+
+fn launcher_path(ctx: &UnitCtx, ext: &str) -> PathBuf {
     ctx.config
         .parent()
         .and_then(|p| p.parent())
-        .map(|base| base.join("run").join(format!("{}-launcher.vbs", ctx.name)))
-        .unwrap_or_else(|| PathBuf::from(format!("{}-launcher.vbs", ctx.name)))
+        .map(|base| {
+            base.join("run")
+                .join(format!("{}-launcher.{ext}", ctx.name))
+        })
+        .unwrap_or_else(|| PathBuf::from(format!("{}-launcher.{ext}", ctx.name)))
 }
 
 fn task_name(name: &str) -> String {
@@ -322,6 +353,9 @@ fn install_unit(ctx: &UnitCtx) -> Result<()> {
     }
     std::fs::write(&vbs, windows_launcher_vbs(ctx))
         .with_context(|| format!("write launcher {}", vbs.display()))?;
+    let cmd = windows_launcher_cmd_path(ctx);
+    std::fs::write(&cmd, windows_launcher_cmd(ctx))
+        .with_context(|| format!("write launcher {}", cmd.display()))?;
 
     let args = schtasks_create_args(ctx);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -338,6 +372,8 @@ fn remove_unit(name: &str) -> Result<()> {
     // Best-effort: remove the VBS launcher too.
     let vbs = crate::support::paths::run_dir().join(format!("{name}-launcher.vbs"));
     let _ = std::fs::remove_file(vbs);
+    let cmd = crate::support::paths::run_dir().join(format!("{name}-launcher.cmd"));
+    let _ = std::fs::remove_file(cmd);
     Ok(())
 }
 
@@ -410,7 +446,8 @@ mod tests {
         let unit = systemd_unit(&ctx());
         assert!(unit.contains(
             "ExecStart=/home/u/.local/bin/fbsy __service-supervised bridge \
-             --config /home/u/.config/fbsy/config/config.json"
+             --config /home/u/.config/fbsy/config/config.json \
+             --log-path /home/u/.config/fbsy/logs/bridge.log"
         ));
         assert!(unit.contains("Restart=always"));
         assert!(unit.contains("WantedBy=default.target"));
@@ -424,6 +461,8 @@ mod tests {
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<string>__service-supervised</string>"));
         assert!(plist.contains("<string>/home/u/.config/fbsy/config/config.json</string>"));
+        assert!(plist.contains("<string>--log-path</string>"));
+        assert!(plist.contains("<string>/home/u/.config/fbsy/logs/bridge.log</string>"));
         assert!(plist.contains("com.fbsy.bridge"));
         assert!(!plist.contains("UserName"));
     }
@@ -443,12 +482,25 @@ mod tests {
     #[test]
     fn windows_launcher_starts_supervised_bridge_hidden() {
         let vbs = windows_launcher_vbs(&ctx());
-        assert!(vbs.contains("__service-supervised bridge"));
-        assert!(vbs.contains("--config"));
+        assert!(vbs.contains("cmd.exe /C"));
+        assert!(vbs.contains("bridge-launcher.cmd"));
         assert!(vbs.contains(", 0, False")); // window style 0 = hidden
         assert_eq!(
             launcher_vbs_path(&ctx()),
             PathBuf::from("/home/u/.config/fbsy/run/bridge-launcher.vbs")
         );
+        assert_eq!(
+            windows_launcher_cmd_path(&ctx()),
+            PathBuf::from("/home/u/.config/fbsy/run/bridge-launcher.cmd")
+        );
+    }
+
+    #[test]
+    fn windows_cmd_launcher_redirects_service_output_to_log() {
+        let cmd = windows_launcher_cmd(&ctx());
+        assert!(cmd.contains("__service-supervised bridge"));
+        assert!(cmd.contains("--config \"/home/u/.config/fbsy/config/config.json\""));
+        assert!(cmd.contains("--log-path \"/home/u/.config/fbsy/logs/bridge.log\""));
+        assert!(cmd.contains(">> \"/home/u/.config/fbsy/logs/bridge.log\" 2>&1"));
     }
 }
