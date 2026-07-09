@@ -20,20 +20,15 @@ pub struct HrmsEvent {
     pub verification_method: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 /// Strategy used to derive HRMS check-in/check-out from device punches.
 pub enum EventTypeMode {
     /// Trust the ZKTeco punch code: 0/4 = check_in, everything else = check_out.
+    #[default]
     PunchCode,
     /// Ignore punch direction and derive first-in/last-out per employee/day.
     FirstInLastOut,
-}
-
-impl Default for EventTypeMode {
-    fn default() -> Self {
-        Self::PunchCode
-    }
 }
 
 impl EventTypeMode {
