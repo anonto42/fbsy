@@ -175,13 +175,13 @@ pub fn launchd_plist(ctx: &UnitCtx) -> String {
 
 /// `schtasks /create` arguments for an ONLOGON task as the current user
 /// (no Administrator shell needed).
+///
+/// The task launches the bridge through `wscript` + a generated VBS launcher
+/// instead of the exe directly: fbsy is a console program, and a scheduled
+/// task running it directly pops a visible terminal window at every logon.
+/// `WScript.Shell.Run` with window style 0 starts it fully hidden.
 pub fn schtasks_create_args(ctx: &UnitCtx) -> Vec<String> {
-    let run = format!(
-        "\"{}\" __service-supervised {} --config \"{}\"",
-        ctx.exe.display(),
-        ctx.name,
-        ctx.config.display()
-    );
+    let run = format!("wscript.exe \"{}\"", launcher_vbs_path(ctx).display());
     vec![
         "/create".into(),
         "/tn".into(),
@@ -192,6 +192,28 @@ pub fn schtasks_create_args(ctx: &UnitCtx) -> Vec<String> {
         "onlogon".into(),
         "/f".into(),
     ]
+}
+
+/// Contents of the hidden-window VBS launcher used by the Windows task.
+/// VBScript escapes a quote inside a string by doubling it.
+pub fn windows_launcher_vbs(ctx: &UnitCtx) -> String {
+    format!(
+        "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" __service-supervised {name} --config \"\"{config}\"\"\", 0, False\r\n",
+        exe = ctx.exe.display(),
+        name = ctx.name,
+        config = ctx.config.display(),
+    )
+}
+
+/// The VBS launcher lives next to the config's base dir:
+/// `<base>/run/<name>-launcher.vbs` (derived from the config path so the
+/// renderer stays pure and testable).
+pub fn launcher_vbs_path(ctx: &UnitCtx) -> PathBuf {
+    ctx.config
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|base| base.join("run").join(format!("{}-launcher.vbs", ctx.name)))
+        .unwrap_or_else(|| PathBuf::from(format!("{}-launcher.vbs", ctx.name)))
 }
 
 fn task_name(name: &str) -> String {
@@ -293,6 +315,14 @@ fn unit_path(name: &str) -> PathBuf {
 
 #[cfg(windows)]
 fn install_unit(ctx: &UnitCtx) -> Result<()> {
+    // Write the hidden-window VBS launcher the task points at.
+    let vbs = launcher_vbs_path(ctx);
+    if let Some(parent) = vbs.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(&vbs, windows_launcher_vbs(ctx))
+        .with_context(|| format!("write launcher {}", vbs.display()))?;
+
     let args = schtasks_create_args(ctx);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_cmd("schtasks", &arg_refs)?;
@@ -304,7 +334,11 @@ fn install_unit(ctx: &UnitCtx) -> Result<()> {
 #[cfg(windows)]
 fn remove_unit(name: &str) -> Result<()> {
     let _ = run_cmd("schtasks", &["/end", "/tn", &task_name(name)]);
-    run_cmd("schtasks", &["/delete", "/tn", &task_name(name), "/f"])
+    run_cmd("schtasks", &["/delete", "/tn", &task_name(name), "/f"])?;
+    // Best-effort: remove the VBS launcher too.
+    let vbs = crate::support::paths::run_dir().join(format!("{name}-launcher.vbs"));
+    let _ = std::fs::remove_file(vbs);
+    Ok(())
 }
 
 /// Whether a boot unit currently exists for `name` (fast, no subprocess).
@@ -395,15 +429,26 @@ mod tests {
     }
 
     #[test]
-    fn schtasks_args_use_onlogon_current_user() {
+    fn schtasks_args_use_onlogon_and_hidden_vbs_launcher() {
         let args = schtasks_create_args(&ctx());
         assert!(args.contains(&"onlogon".to_string()));
         assert!(!args.contains(&"SYSTEM".to_string()));
         assert!(args.contains(&"fbsy-bridge".to_string()));
-        let tr = args
-            .iter()
-            .find(|a| a.contains("__service-supervised"))
-            .unwrap();
-        assert!(tr.contains("--config"));
+        // The task must run wscript + launcher, not the console exe directly
+        // (a direct console exe pops a terminal window at every logon).
+        let tr = args.iter().find(|a| a.contains("wscript.exe")).unwrap();
+        assert!(tr.contains("bridge-launcher.vbs"));
+    }
+
+    #[test]
+    fn windows_launcher_starts_supervised_bridge_hidden() {
+        let vbs = windows_launcher_vbs(&ctx());
+        assert!(vbs.contains("__service-supervised bridge"));
+        assert!(vbs.contains("--config"));
+        assert!(vbs.contains(", 0, False")); // window style 0 = hidden
+        assert_eq!(
+            launcher_vbs_path(&ctx()),
+            PathBuf::from("/home/u/.config/fbsy/run/bridge-launcher.vbs")
+        );
     }
 }
