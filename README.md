@@ -77,40 +77,34 @@ bridge checks every `updateCheckIntervalHours` (default 6) and applies new relea
 ## Quick start
 
 ```bash
-# 1. Start the bridge — first run launches an interactive setup wizard
-fbsy run bridge
+# 1. Configure — HRMS webhook URL + your devices (install offers this too)
+fbsy setup
 
-# 2. Watch everything in a live dashboard (or `fbsy show` for a static snapshot)
-fbsy dashboard
+# 2. Check the config
+fbsy config
 
-# 3. Pull attendance once on demand
-fbsy bridge sync --once
+# 3. Start the bridge in the background
+#    (with autoStartOnBoot in config it also survives reboots and crashes)
+fbsy start
 
-# 4. Make it survive reboots / power loss (runs `fbsy enable` once; needs admin)
-fbsy enable bridge          # prints the exact `sudo …` command to run
-
-# 5. Inspect / stop
-fbsy logs bridge
-fbsy close bridge
+# 4. Day-to-day
+fbsy status    # is it running? BOOT on?
+fbsy logs -f   # watch it live
+fbsy sync      # force one sync now, see pulled/forwarded counts
+fbsy stop      # stop AND remove from boot
 ```
 
-**Run on boot:** `fbsy run` starts *detached* processes that the OS kills on shutdown. To keep the bridge running across reboots and power cycles, `fbsy enable bridge` registers it with the OS init system (systemd / launchd / Windows scheduled task) so it auto-starts at boot and restarts on crash; `fbsy disable bridge` removes it. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) "Run on boot."
+**Run on boot:** when `autoStartOnBoot` is `true` (the setup wizard's default), `fbsy start` registers a **per-user** boot unit — launchd LaunchAgent on macOS, `systemd --user` on Linux, a logon task on Windows — no sudo/Administrator needed. The OS starts the bridge at login and restarts it if it crashes; `fbsy stop` removes the unit again.
 
-`fbsy dashboard` is a full-screen live monitor with both single-key shortcuts (↑/↓ select, `s`/`x`/`r` start/stop/restart, `y` sync, `l` logs, `q` quit) **and** a `:command` bar for the full vocabulary. See [docs/INSTALL_FLOW.md](docs/INSTALL_FLOW.md) for the full install→run lifecycle.
+`fbsy dashboard` is an optional full-screen live monitor over the same functions (shortcuts `s`/`x`/`r` start/stop/restart, `y` sync, Tab logs, `q` quit, plus a typed command bar). Everything works headless without it.
 
 ---
 
 ## How it works
 
-`fbsy` manages three **services**, each of which runs as a **detached background process** (it survives closing the terminal) and writes a registry file so `fbsy show`/`dashboard` can track it:
+`fbsy start` runs the **bridge** as a background process (detached, or OS-supervised when `autoStartOnBoot` is set) and records a registry file so `fbsy status`/`dashboard` can track it. The bridge pulls attendance from every configured device on its own schedule and forwards to the HRMS webhook.
 
-| Service | What it is |
-|---|---|
-| `bridge` | The real bridge — pulls attendance from your devices and forwards to HRMS. This is the one you run in production. |
-| `zkteco` | A mock ZKTeco device server (fake attendance) for local testing without hardware. |
-| `hrms` | A mock HRMS webhook server that prints what it receives, for local testing. |
-
-`fbsy run <service>` starts one; `fbsy show` / `fbsy dashboard` monitor them; `fbsy close <service>` stops one. Each service also has its own command group (e.g. `fbsy bridge sync`, `fbsy zkteco run -p 4370`).
+For testing without hardware, the same binary contains a mock ZKTeco device server and a mock HRMS webhook server (internal `__service-run` entrypoints) — see [docs/LOCAL-TEST-PLAN.md](docs/LOCAL-TEST-PLAN.md).
 
 **Everything lives in one per-OS data directory** (created by `fbsy install`):
 
@@ -164,62 +158,22 @@ Full config reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
 ## Command reference
 
-### Install & lifecycle
 ```bash
-fbsy install                 # copy binary to ~/.local/bin, set up PATH + data dirs
-fbsy uninstall               # remove the binary (keeps your data dir)
-```
+fbsy install       # copy binary to ~/.local/bin, set up PATH + data dirs; offers setup
+fbsy uninstall     # remove the binary (--full also deletes all data, -y skips prompt)
+fbsy update        # self-update from GitHub releases (--check to only report)
 
-### Service management
-```bash
-fbsy run bridge           # start the bridge (wizard on first run)
-fbsy run zkteco [--name dev1 -p 4370 --records 5]   # start a mock device
-fbsy run hrms   [--name hrmsA -p 8800]              # start a mock HRMS
-fbsy show                    # table of all instances: instance / kind / status / port / uptime
-fbsy dashboard               # live full-screen TUI (see below)
-fbsy status <instance>       # detail for one instance
-fbsy logs <instance> [-n 50] [--follow]  # tail an instance's log
-fbsy close <instance>        # stop an instance
-```
-Running `fbsy` with no command is the same as `fbsy show`.
+fbsy setup         # interactive wizard: HRMS webhook, devices, boot, auto-update
+fbsy config        # validate config.json and print a redacted view
 
-**Named instances — run a service more than once.** Each `run` accepts `--name` (default =
-the kind's name), so you can run several of the same service on different ports and address
-each by its name. This is how you simulate multiple devices locally to test a 2-device bridge:
+fbsy start         # start the bridge (installs the boot unit when autoStartOnBoot)
+fbsy stop          # stop the bridge AND remove the boot unit
+fbsy restart       # stop + start, preserving the supervised/detached mode
+fbsy status        # table: running?, BOOT on/off, pid, uptime, port, address
+fbsy sync          # pull + forward once, print JSON result (--device CODE, --config PATH)
+fbsy logs          # print the bridge log (-n N lines, -f to follow)
 
-```bash
-fbsy run zkteco --name dev1 -p 4370     # mock device #1
-fbsy run zkteco --name dev2 -p 4371     # mock device #2
-fbsy show
-#   INSTANCE  KIND     STATUS   PORT   ADDRESS
-#   dev1      zkteco   running  4370   127.0.0.1:4370
-#   dev2      zkteco   running  4371   127.0.0.1:4371
-fbsy close dev2 ; fbsy logs dev1
-```
-The **bridge** itself is normally one instance handling N devices via its config `devices[]`
-array (you point GATE-01→`127.0.0.1:4370`, GATE-02→`127.0.0.1:4371`), but it too can run
-multiple named instances with `--name` + `--config` if you ever need separate bridges.
-
-### `bridge` (the real bridge)
-```bash
-fbsy bridge run [--config PATH --interval N --no-poll]   # same as `fbsy run bridge`
-fbsy bridge sync [--once] [--device GATE-01]             # pull attendance now, then exit
-fbsy bridge config validate          # validate config.json (exit 0/1)
-fbsy bridge config show              # print config with secrets redacted
-fbsy bridge config path              # print the config path fbsy uses
-fbsy bridge config setup             # (re)run the interactive setup wizard
-fbsy bridge doctor [--deep] [--json] # readiness; --deep tests live device + webhook
-fbsy bridge devices list             # list configured devices (no secrets)
-fbsy bridge devices test GATE-01     # test TCP connection to one device
-fbsy bridge devices info GATE-01     # read live device data (serial, firmware, counts)
-fbsy bridge devices info GATE-01 --users   # also list enrolled users
-fbsy bridge webhook test GATE-01     # send an empty batch to verify the webhook
-```
-
-### Mock servers (local testing)
-```bash
-fbsy zkteco run [-p 4370 --records 5]   # = fbsy run zkteco
-fbsy hrms   run [-p 8800]               # = fbsy run hrms
+fbsy dashboard     # optional full-screen TUI over the same functions
 ```
 
 Full CLI reference: [docs/CLI.md](docs/CLI.md)
@@ -228,29 +182,12 @@ Full CLI reference: [docs/CLI.md](docs/CLI.md)
 
 ## The live dashboard (`fbsy dashboard`)
 
-A full-screen terminal UI that auto-refreshes and lets you control services — by single key or by typing a command:
+An optional page-based TUI: a **Home page** (logo, prompt card with live bridge status + last sync result, command palette), an **Output page** (full-height live execution log, opened with Tab or automatically when a command runs), and a **Help page** (`?`).
 
-```
-┌ fbsy  service dashboard   —  : for command, q to quit ┐
-│ SERVICE    STATUS   PID    PORT  UPTIME  DESCRIPTION   │
-│ ▶ bridge   running  4821   7431  2m10s   attendance…   │  ← selected (cyan ▶)
-│   zkteco   running  4830   4370  1m55s   mock device   │
-│   hrms     stopped  -      -     -       mock HRMS      │  ← red = stopped
-├ logs: bridge (running) ───────────────────────────────┤
-│ ➡ Received HRMS Event Payload …                        │  ← live tail
-├ commands ─────────────────────────────────────────────┤
-│ ↑/↓ select  s start  x stop  r restart  y sync  l logs │
-│ : command — start|stop|restart <svc> · sync · logs …   │
-├───────────────────────────────────────────────────────┤
-│ : start zkteco                                         │  ← command input
-└───────────────────────────────────────────────────────┘
-```
+- **Single keys:** `s` start · `x` stop · `r` restart · `y` sync · `Tab` logs · `?` help · `q` quit · `Esc` back home (from home: quit).
+- **Command bar:** just start typing (or press `:`) — `start`, `stop`, `restart`, `sync`, `logs`, `status`, `setup`, `home`, `help`, `install`, `uninstall`, `update`, `quit`. Results appear on the status line; `setup`/`install`/`uninstall`/`update` temporarily suspend the TUI and run attached.
 
-**Two ways to drive it:**
-- **Single keys:** `Tab` switch focus (table ⇄ logs) · ↑/↓ (or j/k) select **or** scroll logs (depends on focus) · `s` start · `x` stop · `r` restart · `y` sync · `l` toggle+focus logs · **`a` all-instance logs** · `q` quit.
-- **Command bar:** press `:` then type a full command — `start <kind>`, `stop|restart <instance>`, `sync [deviceCode]`, `logs <instance>|all`, `select <instance>`, `help`, `quit`. The available commands are always listed in the panel.
-
-The dashboard lists **every running instance** (plus the default kinds as startable rows). The `a` key (or `logs all`) shows a **time-merged live tail of every running instance**, each line tagged `[instance]` — so you watch all services as one chronological stream. Press `Tab` (or `a`/`l`) to focus the log pane, then the arrow keys scroll it. Logs are structured (`<rfc3339> <LEVEL> [component] message`) and persist to per-instance files for diagnosis. Needs a real terminal (prints a hint if piped).
+Logs are structured (`<rfc3339> <LEVEL> [component] message`) and persist to files under the data dir. Needs a real terminal (prints a hint if piped).
 
 ---
 
@@ -312,19 +249,17 @@ These are measurable targets, not aspirations. They define "good enough" for a p
 
 ## Local testing (no real device needed)
 
-Spin up both mock services, point a config at them, and run a one-shot sync:
+The binary contains mock servers for a fully local proof — staged plan with
+visible attendance data in [docs/LOCAL-TEST-PLAN.md](docs/LOCAL-TEST-PLAN.md):
 
 ```bash
-fbsy run hrms                      # mock HRMS webhook on :8800
-fbsy run zkteco                    # mock ZKTeco device on :4370
+fbsy __service-run zkteco --port 14370 --records 5 &   # mock fingerprint device
+fbsy __service-run hrms   --port 18800 &               # mock HRMS webhook server
 
-# config.json with vpsWebhookUrl=http://127.0.0.1:8800/webhook
-# and a device at deviceIp 127.0.0.1, devicePort 4370
-fbsy bridge sync --once         # pulls from the mock device, forwards to mock HRMS
-
-fbsy logs hrms                     # see the events the mock HRMS received
-fbsy dashboard                     # watch all three services live
-fbsy close zkteco && fbsy close hrms
+# config.json: vpsWebhookUrl=http://127.0.0.1:18800/webhook,
+#              device at 127.0.0.1:14370
+fbsy sync                            # → ok: true, pulled 5, forwarded 5
+curl -s http://127.0.0.1:18800/events   # the punches, visible on the HRMS side
 ```
 
 ---
@@ -342,8 +277,8 @@ bash scripts/install-hooks.sh
 
 cargo build
 cargo test
-cargo run -- show
-cargo run -- bridge doctor
+cargo run -- status
+cargo run -- config
 ```
 
 To build a release binary locally:
@@ -375,7 +310,7 @@ src/
                     job poller, scheduler
 ```
 
-The service model: `fbsy run X` spawns a detached child that re-enters the binary through a hidden `__service-run` subcommand and runs the matching blocking loop (`serve` for the bridge, `test_server` for the mocks). The parent records a registry file and exits; `show`/`dashboard`/`close` operate on that registry plus a live process check.
+The service model: `fbsy start` spawns a detached child that re-enters the binary through a hidden `__service-run` subcommand and runs the blocking bridge loop (`serve`) — or, with `autoStartOnBoot`, installs a per-user OS unit that runs `__service-supervised` in the foreground under launchd/systemd/schtasks. Either way the process self-registers so `status`/`logs`/`stop` operate on the registry plus a live process check.
 
 Architecture decision record: [docs/CODEBASE_ARCHITECTURE_DECISION.md](docs/CODEBASE_ARCHITECTURE_DECISION.md)
 

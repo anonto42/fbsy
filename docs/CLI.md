@@ -1,68 +1,54 @@
-# CLI Design
+# CLI Reference
 
-The Rust bridge ships as `fbsy` and uses `clap` for command parsing.
+The bridge ships as one binary, `fbsy`. Every operation works headless from
+the CLI; the dashboard is an optional viewer. This is the complete surface —
+see `CLAUDE.md` for the rule that it must not grow.
 
-## Selected CLI Stack
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `fbsy install` | Copy the binary to a per-user bin dir, add PATH, create data dirs; offers the setup wizard when no config exists |
+| `fbsy uninstall` | Remove the binary and PATH entries (`--full` also deletes config/logs/data, `-y` skips the prompt) |
+| `fbsy update` | Self-update from GitHub releases (`--check` only reports, `-y` skips the prompt) |
+| `fbsy setup` | Interactive wizard: HRMS webhook, devices, boot auto-start, auto-update |
+| `fbsy config` | Check the config: validate it and print a redacted view |
+| `fbsy start` | Start the bridge in the background; when config has `autoStartOnBoot`, installs the per-user boot unit and runs OS-supervised |
+| `fbsy stop` | Stop the bridge AND remove the boot unit |
+| `fbsy restart` | Stop + start, preserving supervised/detached mode |
+| `fbsy status` | One table: running?, BOOT on/off, pid, uptime, port, address |
+| `fbsy sync` | Pull attendance and forward to HRMS once, print the JSON result, exit (`--device CODE`, `--config PATH`) |
+| `fbsy logs` | Print the bridge log (`-n N` lines, `-f` to follow) |
+| `fbsy dashboard` | Full-screen TUI over the same core functions |
+
+Hidden internals (`__service-run`, `__service-supervised`) let the binary
+re-enter itself for detached/supervised execution and the built-in mock
+servers used by `docs/LOCAL-TEST-PLAN.md`.
+
+## Daily operation
+
+```bash
+fbsy status    # is it running? BOOT on?
+fbsy logs -f   # watch it live
+fbsy stop      # stop AND remove from boot
+fbsy start     # start AND re-enable boot
+fbsy sync      # force one sync now
+```
+
+## Boot persistence
+
+Per-user, never needs sudo/Administrator:
+
+- macOS: `~/Library/LaunchAgents/com.fbsy.bridge.plist` (RunAtLoad + KeepAlive)
+- Linux: `~/.config/systemd/user/fbsy-bridge.service` (Restart=always)
+- Windows: `schtasks` ONLOGON task for the current user
+
+## CLI stack
 
 ```toml
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-thiserror = "2"
 dialoguer = "0.11"
 console = "0.15"
-indicatif = "0.17"
-comfy-table = "7"
-```
-
-## Command Shape
-
-Recommended command style:
-
-```bash
-fbsy show
-fbsy dashboard
-fbsy run bridge
-fbsy run scanner --interval 300
-fbsy scanner scan --cidr 192.168.1.0/24
-fbsy run zkteco --name dev1 -p 4370
-fbsy bridge doctor
-fbsy bridge sync --once
-fbsy bridge config validate
-fbsy bridge config show
-```
-
-Compatibility aliases:
-
-```bash
-fbsy bridge run
-fbsy at-bridge run
-```
-
-## Command Responsibilities
-
-| Command | Purpose |
-| --- | --- |
-| `run <service>` | Start a detached named service instance |
-| `show` | List running instances |
-| `dashboard` | Monitor/control instances in a TUI; its `:` bar can run any CLI command without `fbsy` |
-| `scanner scan` | Discover likely ZKTeco attendance devices on the LAN |
-| `run scanner` | Run repeated network discovery as a detached service |
-| `bridge doctor` | Show local readiness and config path |
-| `bridge config setup` | Run first-time configuration wizard |
-| `bridge sync --once` | Pull and forward attendance once, then exit |
-| `bridge config validate` | Validate `config.json` |
-| `bridge config show` | Print redacted config |
-
-## First Output Goal
-
-```text
-ZKTeco Bridge Rust
-
-Runtime: rust
-Config:  missing
-Path:    ./config.json
-
-Next:
-fbsy bridge config setup
-fbsy bridge config validate
+ratatui = "0.29"
 ```
