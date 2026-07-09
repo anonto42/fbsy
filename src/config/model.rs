@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::EventTypeMode;
+
 /// How the bridge receives attendance.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +70,8 @@ pub struct BridgeDeviceConfig {
     /// `None` means UTC, preserving the legacy Python-bridge behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_timezone: Option<String>,
+    /// How check-in/check-out is derived from device punches.
+    pub event_type_mode: EventTypeMode,
     /// HRMS device identifier used by the webhook.
     pub device_code: String,
     /// Shared webhook secret. This must never be logged raw.
@@ -115,6 +119,7 @@ pub struct RedactedBridgeDeviceConfig {
     pub device_omit_ping: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_timezone: Option<String>,
+    pub event_type_mode: EventTypeMode,
     pub device_code: String,
     pub api_key: String,
     pub organization_id: u64,

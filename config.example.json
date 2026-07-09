@@ -14,6 +14,7 @@
       "deviceForceUdp": false,
       "deviceOmitPing": true,
       "deviceTimezone": "Asia/Dhaka",
+      "eventTypeMode": "punchCode",
       "deviceCode": "YOUR-DEVICE-CODE",
       "organizationId": 1,
       "apiKey": "your-webhook-api-key-here",

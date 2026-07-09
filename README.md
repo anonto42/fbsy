@@ -132,6 +132,7 @@ with `config/config.json`, `logs/<service>.log`, and `run/<service>.json` (the p
       "deviceTimeout": 15,
       "deviceOmitPing": true,
       "deviceTimezone": "Asia/Dhaka",
+      "eventTypeMode": "punchCode",
       "deviceCode": "GATE-01",
       "apiKey": "your-webhook-api-key",
       "organizationId": 1,

@@ -8,7 +8,7 @@ use fingerbridge::{
     adapters::device_zkteco_tcp::ZktecoTcpConnector,
     application::test_server,
     config::BridgeDeviceConfig,
-    domain::{DeviceUser, FingerTemplate},
+    domain::{DeviceUser, EventTypeMode, FingerTemplate},
     ports::device::DeviceConnector,
 };
 
@@ -21,6 +21,7 @@ fn device_cfg(port: u16) -> BridgeDeviceConfig {
         device_force_udp: false,
         device_omit_ping: true,
         device_timezone: None,
+        event_type_mode: EventTypeMode::PunchCode,
         device_code: "MOCK".to_string(),
         api_key: "k".to_string(),
         organization_id: 1,

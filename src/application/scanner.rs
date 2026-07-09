@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::{
     adapters::device_zkteco_tcp::ZktecoTcpConnector, config::BridgeDeviceConfig,
-    ports::device::DeviceConnector, support::network,
+    domain::EventTypeMode, ports::device::DeviceConnector, support::network,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -368,6 +368,7 @@ fn probe_zkteco(opts: &ScanOptions, ip: Ipv4Addr, port: u16) -> Option<ScanFindi
         device_force_udp: opts.force_udp,
         device_omit_ping: true,
         device_timezone: None,
+        event_type_mode: EventTypeMode::PunchCode,
         device_code: suggested_device_code(None, ip),
         api_key: String::new(),
         organization_id: 1,

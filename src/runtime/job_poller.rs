@@ -196,7 +196,7 @@ mod tests {
     use crate::{
         adapters::hrms_reqwest::PendingJob,
         config::BridgeDeviceConfig,
-        domain::{DeviceUser, FingerTemplate, RawAttendance},
+        domain::{DeviceUser, EventTypeMode, FingerTemplate, RawAttendance},
         ports::device::{DeviceClient, DeviceConnector, DeviceError},
     };
 
@@ -211,6 +211,7 @@ mod tests {
             device_force_udp: false,
             device_omit_ping: true,
             device_timezone: None,
+            event_type_mode: EventTypeMode::PunchCode,
             device_code: "GATE-01".to_string(),
             api_key: "device-key".to_string(),
             organization_id: 1,

@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use fingerbridge::config::{BridgeConfig, BridgeMode, ConfigError};
+use fingerbridge::domain::EventTypeMode;
 use serde_json::json;
 
 #[test]
@@ -192,6 +193,38 @@ fn invalid_device_timezone_is_rejected() {
 
     assert!(matches!(err, ConfigError::Invalid(_)));
     assert!(err.to_string().contains("deviceTimezone"));
+}
+
+#[test]
+fn event_type_mode_accepts_first_in_last_out() {
+    let cfg = BridgeConfig::from_json_value(json!({
+        "deviceIp": "192.168.1.10",
+        "deviceCode": "DEVICE-1",
+        "apiKey": "secret",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "eventTypeMode": "firstInLastOut"
+    }))
+    .expect("eventTypeMode should load");
+
+    assert_eq!(
+        cfg.devices[0].event_type_mode,
+        EventTypeMode::FirstInLastOut
+    );
+}
+
+#[test]
+fn invalid_event_type_mode_is_rejected() {
+    let err = BridgeConfig::from_json_value(json!({
+        "deviceIp": "192.168.1.10",
+        "deviceCode": "DEVICE-1",
+        "apiKey": "secret",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "eventTypeMode": "alwaysCheckIn"
+    }))
+    .expect_err("unknown eventTypeMode must fail");
+
+    assert!(matches!(err, ConfigError::Invalid(_)));
+    assert!(err.to_string().contains("eventTypeMode"));
 }
 
 #[test]

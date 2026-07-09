@@ -25,6 +25,7 @@ vpsWebhookUrl
 | `deviceForceUdp` | `false` |
 | `deviceOmitPing` | `true` |
 | `deviceTimezone` | `UTC` (offset `+00:00`) |
+| `eventTypeMode` | `punchCode` |
 | `organizationId` | `1` |
 | `clearAttendanceAfterSync` | `false` |
 | `port` | `7431` |
@@ -45,6 +46,11 @@ vpsWebhookUrl
   timezone to map each punch to the correct calendar instant before sending it to
   the HRMS. Omit it (or set `UTC`) only if the device clock is on UTC. IANA names
   are resolved to the current offset when the sync runs.
+- `eventTypeMode` controls how FBSY derives `check_in` / `check_out`.
+  Use `punchCode` when the device's punch code is reliable (`0`/`4` are treated as
+  check-in, all other codes as check-out). Use `firstInLastOut` for devices that
+  send the same punch code for every swipe: per employee per local day, the first
+  punch is sent as check-in and later punches are sent as check-out.
 
 ## Secret Handling
 

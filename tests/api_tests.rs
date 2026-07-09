@@ -15,6 +15,7 @@ use fingerbridge::{
     adapters::{device_zkteco_tcp::ZktecoTcpConnector, hrms_reqwest::ReqwestHrmsClient},
     application::serve::handle_client,
     config::BridgeDeviceConfig,
+    domain::EventTypeMode,
     runtime::DeviceSyncState,
 };
 
@@ -29,6 +30,7 @@ fn device_cfg(code: &str) -> BridgeDeviceConfig {
         device_force_udp: false,
         device_omit_ping: true,
         device_timezone: None,
+        event_type_mode: EventTypeMode::PunchCode,
         device_code: code.to_string(),
         api_key: "test-api-key".to_string(),
         organization_id: 1,

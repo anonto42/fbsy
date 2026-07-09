@@ -342,6 +342,7 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         device_force_udp,
         device_omit_ping,
         device_timezone,
+        event_type_mode: crate::domain::EventTypeMode::PunchCode,
         device_code: device_code.trim().to_string(),
         api_key: api_key.trim().to_string(),
         organization_id,

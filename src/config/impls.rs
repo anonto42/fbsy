@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use chrono::FixedOffset;
 use serde_json::{Map, Value};
 
-use crate::domain::{default_utc_offset, resolve_device_timezone_offset};
+use crate::domain::{default_utc_offset, resolve_device_timezone_offset, EventTypeMode};
 use crate::support::redaction::redact;
 
 use super::{
@@ -178,6 +178,7 @@ impl BridgeDeviceConfig {
             device_force_udp: self.device_force_udp,
             device_omit_ping: self.device_omit_ping,
             device_timezone: self.device_timezone.clone(),
+            event_type_mode: self.event_type_mode,
             device_code: redact(&self.device_code),
             api_key: redact(&self.api_key),
             organization_id: self.organization_id,
@@ -516,6 +517,10 @@ fn parse_device_from_object(
         )?,
         device_timezone: optional_trimmed_string(object, "deviceTimezone")
             .filter(|value| !value.is_empty()),
+        event_type_mode: parse_event_type_mode(
+            optional_trimmed_string(object, "eventTypeMode").as_deref(),
+            context,
+        )?,
         device_code: required_string(object, "deviceCode", context)?,
         api_key: required_string(object, "apiKey", context)?,
         organization_id: u64_from_value(
@@ -565,6 +570,17 @@ fn optional_trimmed_string(object: &Map<String, Value>, key: &str) -> Option<Str
         Value::Null => None,
         other => Some(other.to_string().trim_matches('"').trim().to_string()),
     })
+}
+
+fn parse_event_type_mode(value: Option<&str>, context: &str) -> Result<EventTypeMode, ConfigError> {
+    match value {
+        None => Ok(EventTypeMode::default()),
+        Some(raw) => EventTypeMode::parse(raw).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "{context}: eventTypeMode must be punchCode or firstInLastOut (got '{raw}')"
+            ))
+        }),
+    }
 }
 
 fn strip_trailing_slash(value: String) -> String {

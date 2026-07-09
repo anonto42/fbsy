@@ -13,6 +13,7 @@
       "deviceForceUdp": false,
       "deviceOmitPing": true,
       "deviceTimezone": "Asia/Dhaka",
+      "eventTypeMode": "punchCode",
       "deviceCode": "MOCK-GATE-01",
       "organizationId": 1,
       "apiKey": "mock-key",

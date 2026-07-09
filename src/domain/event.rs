@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::RawAttendance;
 
@@ -17,6 +18,34 @@ pub struct HrmsEvent {
     pub event_type: String,
     /// Source marker that tells HRMS where the event came from.
     pub verification_method: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+/// Strategy used to derive HRMS check-in/check-out from device punches.
+pub enum EventTypeMode {
+    /// Trust the ZKTeco punch code: 0/4 = check_in, everything else = check_out.
+    PunchCode,
+    /// Ignore punch direction and derive first-in/last-out per employee/day.
+    FirstInLastOut,
+}
+
+impl Default for EventTypeMode {
+    fn default() -> Self {
+        Self::PunchCode
+    }
+}
+
+impl EventTypeMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "punchcode" | "punch_code" | "punch-code" => Some(Self::PunchCode),
+            "firstinlastout" | "first_in_last_out" | "first-in-last-out" => {
+                Some(Self::FirstInLastOut)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Parse a configured device timezone string into a fixed UTC offset.
@@ -129,7 +158,11 @@ pub fn event_type_from_punch(punch: i64) -> &'static str {
 }
 
 /// Convert raw device records into sorted HRMS events using the device's offset.
-pub fn to_hrms_events(records: &[RawAttendance], offset: FixedOffset) -> Vec<HrmsEvent> {
+pub fn to_hrms_events(
+    records: &[RawAttendance],
+    offset: FixedOffset,
+    event_type_mode: EventTypeMode,
+) -> Vec<HrmsEvent> {
     let mut events = records
         .iter()
         .filter_map(|record| to_hrms_event(record, offset))
@@ -137,7 +170,23 @@ pub fn to_hrms_events(records: &[RawAttendance], offset: FixedOffset) -> Vec<Hrm
 
     // Stable chronological ordering makes webhook behavior predictable.
     events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    if event_type_mode == EventTypeMode::FirstInLastOut {
+        apply_first_in_last_out(&mut events);
+    }
     events
+}
+
+fn apply_first_in_last_out(events: &mut [HrmsEvent]) {
+    let mut seen = HashSet::new();
+    for event in events {
+        let local_date = event.timestamp.get(..10).unwrap_or("");
+        let key = (event.device_employee_id.clone(), local_date.to_string());
+        event.event_type = if seen.insert(key) {
+            "check_in".to_string()
+        } else {
+            "check_out".to_string()
+        };
+    }
 }
 
 fn to_hrms_event(record: &RawAttendance, offset: FixedOffset) -> Option<HrmsEvent> {

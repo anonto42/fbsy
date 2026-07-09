@@ -5,7 +5,7 @@ use std::{
 
 use fingerbridge::{
     config::BridgeDeviceConfig,
-    domain::{DeviceUser, FingerTemplate, HrmsEvent, RawAttendance},
+    domain::{DeviceUser, EventTypeMode, FingerTemplate, HrmsEvent, RawAttendance},
     ports::{
         device::{DeviceClient, DeviceConnector, DeviceError},
         hrms::{HrmsClient, HrmsError, WebhookResult},
@@ -22,6 +22,7 @@ fn device_config(clear_attendance_after_sync: bool) -> BridgeDeviceConfig {
         device_force_udp: false,
         device_omit_ping: true,
         device_timezone: None,
+        event_type_mode: EventTypeMode::PunchCode,
         device_code: "DEVICE-1".to_string(),
         api_key: "secret-key".to_string(),
         organization_id: 1,

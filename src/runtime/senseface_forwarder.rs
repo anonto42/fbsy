@@ -11,7 +11,10 @@ use anyhow::Result;
 
 use crate::{
     config::{BridgeDeviceConfig, SenseFaceConfig},
-    domain::senseface::{senseface_timezone_offset, to_hrms_events_from_senseface},
+    domain::{
+        senseface::{senseface_timezone_offset, to_hrms_events_from_senseface},
+        EventTypeMode,
+    },
     ports::{hrms::HrmsClient, senseface_store::SenseFaceStore},
     support::log,
 };
@@ -129,6 +132,7 @@ fn resolve_device_config(serial: &str, config: &SenseFaceConfig) -> BridgeDevice
             device_force_udp: false,
             device_omit_ping: true,
             device_timezone: None,
+            event_type_mode: EventTypeMode::PunchCode,
             device_code: mapping.device_code.clone(),
             api_key: mapping.api_key.clone(),
             organization_id: mapping.organization_id,
@@ -146,6 +150,7 @@ fn resolve_device_config(serial: &str, config: &SenseFaceConfig) -> BridgeDevice
         device_force_udp: false,
         device_omit_ping: true,
         device_timezone: None,
+        event_type_mode: EventTypeMode::PunchCode,
         device_code: format!("{}-{}", config.device_code_prefix, serial),
         api_key: config.api_key.clone(),
         organization_id: config.organization_id,

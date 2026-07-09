@@ -1,7 +1,8 @@
 use chrono::FixedOffset;
 use fingerbridge::domain::{
     default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset,
-    resolve_device_timezone_offset, resolve_iana_timezone_offset, to_hrms_events, RawAttendance,
+    resolve_device_timezone_offset, resolve_iana_timezone_offset, to_hrms_events, EventTypeMode,
+    RawAttendance,
 };
 use serde_json::json;
 
@@ -100,6 +101,7 @@ fn hrms_events_skip_malformed_records_and_sort_by_timestamp() {
             },
         ],
         utc(),
+        EventTypeMode::PunchCode,
     );
 
     assert_eq!(events.len(), 2);
@@ -118,6 +120,7 @@ fn event_serializes_to_exact_hrms_field_names() {
             punch: 0,
         }],
         utc(),
+        EventTypeMode::PunchCode,
     )
     .into_iter()
     .next()
@@ -133,6 +136,45 @@ fn event_serializes_to_exact_hrms_field_names() {
             "verificationMethod": "fingerbridge"
         })
     );
+}
+
+#[test]
+fn first_in_last_out_mode_ignores_punch_codes_per_employee_day() {
+    let events = to_hrms_events(
+        &[
+            RawAttendance {
+                user_id: "7".to_string(),
+                timestamp: "2026-07-09T18:05:00".to_string(),
+                punch: 0,
+            },
+            RawAttendance {
+                user_id: "7".to_string(),
+                timestamp: "2026-07-09T08:55:00".to_string(),
+                punch: 0,
+            },
+            RawAttendance {
+                user_id: "8".to_string(),
+                timestamp: "2026-07-09T09:00:00".to_string(),
+                punch: 4,
+            },
+            RawAttendance {
+                user_id: "7".to_string(),
+                timestamp: "2026-07-10T08:58:00".to_string(),
+                punch: 0,
+            },
+        ],
+        plus_six(),
+        EventTypeMode::FirstInLastOut,
+    );
+
+    assert_eq!(events[0].device_employee_id, "7");
+    assert_eq!(events[0].event_type, "check_in");
+    assert_eq!(events[1].device_employee_id, "8");
+    assert_eq!(events[1].event_type, "check_in");
+    assert_eq!(events[2].device_employee_id, "7");
+    assert_eq!(events[2].event_type, "check_out");
+    assert_eq!(events[3].device_employee_id, "7");
+    assert_eq!(events[3].event_type, "check_in");
 }
 
 #[test]

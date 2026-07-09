@@ -183,6 +183,7 @@ cleanly. Multi-device format:
       "deviceForceUdp": false,
       "deviceOmitPing": true,
       "deviceTimezone": "+06:00",
+      "eventTypeMode": "punchCode",
       "deviceCode": "GATE-01",
       "apiKey": "webhook-api-key-for-this-device",
       "organizationId": 1,
@@ -197,7 +198,8 @@ Per-device defaults (apply when missing): `devicePort=4370`, `devicePassword=0`,
 `deviceTimeout=15`, `deviceForceUdp=false`, `deviceOmitPing=true`,
 `deviceTimezone=UTC` (optional; fixed offset like `+06:00` or IANA name like
 `Asia/Dhaka` for the device clock's zone — naive device timestamps are interpreted
-in this timezone),
+in this timezone), `eventTypeMode=punchCode` (`firstInLastOut` for devices that
+send the same punch code for every swipe),
 `organizationId=1`, `syncIntervalSeconds=300` (clamp up to 5 if smaller),
 `clearAttendanceAfterSync=false`. Top-level `bridgePort=7431`,
 `jobPollIntervalSeconds=30` (clamp up to 5).
