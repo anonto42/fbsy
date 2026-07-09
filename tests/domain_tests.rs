@@ -1,7 +1,7 @@
 use chrono::FixedOffset;
 use fingerbridge::domain::{
     default_utc_offset, event_type_from_punch, parse_timestamp, parse_utc_offset,
-    resolve_iana_timezone_offset, to_hrms_events, RawAttendance,
+    resolve_device_timezone_offset, resolve_iana_timezone_offset, to_hrms_events, RawAttendance,
 };
 use serde_json::json;
 
@@ -59,6 +59,19 @@ fn utc_offset_parser_accepts_common_forms() {
     );
     assert_eq!(parse_utc_offset("garbage"), None);
     assert_eq!(parse_utc_offset("+25:00"), None);
+}
+
+#[test]
+fn device_timezone_accepts_iana_name() {
+    assert_eq!(
+        resolve_device_timezone_offset("Asia/Dhaka"),
+        FixedOffset::east_opt(6 * 3600)
+    );
+    assert_eq!(
+        resolve_device_timezone_offset("+06:00"),
+        FixedOffset::east_opt(6 * 3600)
+    );
+    assert_eq!(resolve_device_timezone_offset("Not/ARealZone"), None);
 }
 
 #[test]

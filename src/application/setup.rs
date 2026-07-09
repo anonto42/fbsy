@@ -269,13 +269,13 @@ fn collect_device(number: usize) -> Result<BridgeDeviceConfig> {
         .interact()?;
 
     let device_timezone: String = Input::new()
-        .with_prompt("Device timezone offset (UTC or e.g. +06:00; the device's clock zone)")
+        .with_prompt("Device timezone (UTC, +06:00, or Asia/Dhaka; the device's clock zone)")
         .default("UTC".to_string())
         .validate_with(|input: &String| {
-            if crate::domain::parse_utc_offset(input).is_some() {
+            if crate::domain::resolve_device_timezone_offset(input).is_some() {
                 Ok(())
             } else {
-                Err("Must be UTC or a fixed offset like +06:00")
+                Err("Must be UTC, a fixed offset like +06:00, or an IANA timezone like Asia/Dhaka")
             }
         })
         .interact_text()?;

@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use crate::{
     config::BridgeDeviceConfig,
     domain::{
-        default_utc_offset, parse_utc_offset, resolve_iana_timezone_offset, to_hrms_events,
-        SyncResult,
+        default_utc_offset, resolve_device_timezone_offset, resolve_iana_timezone_offset,
+        to_hrms_events, SyncResult,
     },
     ports::{
         device::{DeviceClient, DeviceConnector},
@@ -74,7 +74,7 @@ impl DeviceSyncState {
             .device
             .device_timezone
             .as_deref()
-            .and_then(parse_utc_offset)
+            .and_then(resolve_device_timezone_offset)
         {
             return offset;
         }

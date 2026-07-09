@@ -131,6 +131,7 @@ with `config/config.json`, `logs/<service>.log`, and `run/<service>.json` (the p
       "devicePassword": 0,
       "deviceTimeout": 15,
       "deviceOmitPing": true,
+      "deviceTimezone": "Asia/Dhaka",
       "deviceCode": "GATE-01",
       "apiKey": "your-webhook-api-key",
       "organizationId": 1,

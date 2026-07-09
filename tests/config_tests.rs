@@ -159,6 +159,42 @@ fn sync_and_job_poll_intervals_are_clamped_to_five_seconds() {
 }
 
 #[test]
+fn device_timezone_accepts_iana_name() {
+    let cfg = BridgeConfig::from_json_value(json!({
+        "deviceIp": "192.168.1.10",
+        "deviceCode": "DEVICE-1",
+        "apiKey": "secret",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "deviceTimezone": "Asia/Dhaka"
+    }))
+    .expect("IANA device timezone should load");
+
+    assert_eq!(
+        cfg.devices[0].device_timezone.as_deref(),
+        Some("Asia/Dhaka")
+    );
+    assert_eq!(
+        cfg.devices[0].utc_offset(),
+        chrono::FixedOffset::east_opt(6 * 3600).unwrap()
+    );
+}
+
+#[test]
+fn invalid_device_timezone_is_rejected() {
+    let err = BridgeConfig::from_json_value(json!({
+        "deviceIp": "192.168.1.10",
+        "deviceCode": "DEVICE-1",
+        "apiKey": "secret",
+        "vpsWebhookUrl": "https://example.test/webhook",
+        "deviceTimezone": "Mars/Olympus"
+    }))
+    .expect_err("unknown device timezone must fail");
+
+    assert!(matches!(err, ConfigError::Invalid(_)));
+    assert!(err.to_string().contains("deviceTimezone"));
+}
+
+#[test]
 fn redacted_config_hides_all_device_api_keys() {
     let cfg = BridgeConfig::from_json_value(json!({
         "vpsWebhookUrl": "https://example.test/webhook",

@@ -29,8 +29,7 @@ pub struct HrmsEvent {
 /// - `+06:00`, `-05:30`, `+0600`, `-0530`, `+06`, `-05`
 ///
 /// Returns `None` if the string cannot be understood (the caller treats that as a
-/// validation error). DST-aware IANA zones are intentionally not supported here to
-/// keep the bridge dependency-light; fixed-offset deployments are the target.
+/// validation error).
 pub fn parse_utc_offset(value: &str) -> Option<FixedOffset> {
     let trimmed = value.trim();
     if trimmed.is_empty()
@@ -89,6 +88,12 @@ pub fn resolve_iana_timezone_offset(name: &str) -> Option<FixedOffset> {
     let tz: chrono_tz::Tz = name.trim().parse().ok()?;
     let now = Utc::now().with_timezone(&tz);
     Some(now.offset().fix())
+}
+
+/// Resolve a configured device timezone into the fixed offset to use for this
+/// sync cycle. Accepts fixed offsets (`+06:00`) and IANA names (`Asia/Dhaka`).
+pub fn resolve_device_timezone_offset(value: &str) -> Option<FixedOffset> {
+    parse_utc_offset(value).or_else(|| resolve_iana_timezone_offset(value))
 }
 
 /// Parse a device timestamp into the offset-aware ISO string sent to HRMS.

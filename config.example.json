@@ -13,6 +13,7 @@
       "deviceTimeout": 15,
       "deviceForceUdp": false,
       "deviceOmitPing": true,
+      "deviceTimezone": "Asia/Dhaka",
       "deviceCode": "YOUR-DEVICE-CODE",
       "organizationId": 1,
       "apiKey": "your-webhook-api-key-here",

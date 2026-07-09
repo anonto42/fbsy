@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use chrono::FixedOffset;
 use serde_json::{Map, Value};
 
-use crate::domain::{default_utc_offset, parse_utc_offset};
+use crate::domain::{default_utc_offset, resolve_device_timezone_offset};
 use crate::support::redaction::redact;
 
 use super::{
@@ -194,7 +194,7 @@ impl BridgeDeviceConfig {
     pub fn utc_offset(&self) -> FixedOffset {
         self.device_timezone
             .as_deref()
-            .and_then(parse_utc_offset)
+            .and_then(resolve_device_timezone_offset)
             .unwrap_or_else(default_utc_offset)
     }
 
@@ -225,9 +225,9 @@ impl BridgeDeviceConfig {
             )));
         }
         if let Some(timezone) = self.device_timezone.as_deref() {
-            if parse_utc_offset(timezone).is_none() {
+            if resolve_device_timezone_offset(timezone).is_none() {
                 return Err(ConfigError::Invalid(format!(
-                    "{prefix}deviceTimezone must be UTC or a fixed offset like +06:00 (got '{timezone}')"
+                    "{prefix}deviceTimezone must be UTC, a fixed offset like +06:00, or an IANA timezone like Asia/Dhaka (got '{timezone}')"
                 )));
             }
         }

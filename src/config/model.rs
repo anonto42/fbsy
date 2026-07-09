@@ -64,7 +64,7 @@ pub struct BridgeDeviceConfig {
     pub device_force_udp: bool,
     /// Whether the device adapter should skip ping before connecting.
     pub device_omit_ping: bool,
-    /// Fixed UTC offset the device's naive timestamps are in (e.g. `+06:00`).
+    /// Timezone the device's naive timestamps are in (e.g. `+06:00` or `Asia/Dhaka`).
     /// `None` means UTC, preserving the legacy Python-bridge behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_timezone: Option<String>,
